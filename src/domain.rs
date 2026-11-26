@@ -92,6 +92,9 @@ pub(crate) fn field_problems(issue: &Issue) -> Vec<(&'static str, &'static str)>
         if issue.closed_at.is_some() {
             out.push(("active issue has closed_at", "remove the closed_at value"));
         }
+        if issue.release.is_some() {
+            out.push(("active issue has release", "remove the release value"));
+        }
         if issue.closing_summary.is_some() {
             out.push((
                 "active issue has a closing summary",

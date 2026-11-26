@@ -129,19 +129,30 @@ contract and acceptance checks for v1.
   current closing date and assignment, and keeps the same ID and history.
   It returns to `ready` only if eligible. Unfinished dependents that require
   this issue are blocked again.
+- A closed issue records the release it shipped in, in `release`. Only
+  closed issues carry it. `release NAME` is a human action: it sets
+  `release` to `NAME` on every closed issue whose `release` is `null` and
+  prints their IDs; a later run stamps only issues closed since. People
+  correct one issue with `update ID --release NAME`, for example after a
+  skipped release; it works only on closed issues and records the old and
+  new value in history. `reopen` clears `release` and records the former
+  value in its history entry. `list --release NAME` lists the closed
+  issues of one release. Planning what a release must contain uses an
+  ordinary issue with dependencies; there is no target-release field.
 - `update` is non-interactive and changes only supplied fields: title,
-  priority, or description. It does not change lifecycle state or overwrite
-  the history or notes. There is no interactive `edit`. For both `add` and
-  `update`, `--body TEXT` takes literal text and `--body -` reads stdin.
-  Omission does not read stdin; `update` then leaves the description alone.
-  There is no `--body-file`.
+  priority, description, or the release of a closed issue. It does not change
+  lifecycle state or overwrite the history or notes. There is no interactive
+  `edit`. For both `add` and `update`, `--body TEXT` takes literal text and
+  `--body -` reads stdin. Omission does not read stdin; `update` then leaves
+  the description alone. There is no `--body-file`.
 
 ### History, Notes, And Manual Summaries
 
 - `## History` records approvals, revisions, review submissions, rework
-  requests, closure, reopening, and forced claims. Append entries with a UTC
-  date and time down to seconds. Keep existing entries even when the same transition occurs
-  several times. Timestamps are not used to pick winners after synchronization.
+  requests, closure, reopening, release corrections, and forced claims. Append
+  entries with a UTC date and time down to seconds. Keep existing entries even
+  when the same transition occurs several times. Timestamps are not used to
+  pick winners after synchronization.
 - `--reason` says why someone closed, reopened, revised, or returned an
   issue for rework. Record it in the history entry; do not duplicate it in
   YAML.
@@ -231,9 +242,9 @@ contract and acceptance checks for v1.
   duplicate IDs, merge conflict markers, missing blockers or ancestors,
   dependency cycles, inconsistent fields (for example a `proposed` or
   `open` issue with `claim_id` or `assignee`, a `claimed` issue without
-  `claim_id`, or `closed_at` or a closing summary on an active issue), a
-  pending or mismatched move record, an unreadable
-  `memory.md`, unexpected files in `open/` or `closed/`, and the legacy
+  `claim_id`, or `closed_at`, `release`, or a closing summary on an active
+  issue), a pending or mismatched move record, an unreadable `memory.md`,
+  unexpected files in `open/` or `closed/`, and the legacy
   `/.*.tmp-*` rule in `.jig/.gitignore`.
 - Unknown legacy metadata is not a problem: a `closed` issue may have
   `closed_at: null`, and an issue in `review` may have no `assignee` or
@@ -254,15 +265,18 @@ contract and acceptance checks for v1.
   the active issue does not present an old outcome as its current summary.
 - **On-disk format.** Fixed, one-line YAML fields: `id`, `title`, `status`,
   `priority`, `parent`, `depends_on`, `assignee`, `defer_until`, `created_at`,
-  `updated_at`, and `closed_at`. Add a nullable `claim_id` to distinguish
-  independent claims, even with identical or absent assignee labels. Use
-  `null` for unset scalar fields and `[]` for no dependencies. `priority`
-  is never `null`: it is always an integer from 0 to 4, and any other
-  value, `null` included, makes the file invalid like any other invalid
-  field. `check` names the field and hints to set it to 0–4. Reserve
-  top-level `## Closing Summary`, `## History`, and `## Notes` for the
-  managed sections.
-  No project `config.json` until a real per-project setting is needed.
+  `updated_at`, `closed_at`, and `release`. Add a nullable `claim_id` to
+  distinguish independent claims, even with identical or absent assignee
+  labels. Use `null` for unset scalar fields and `[]` for no dependencies.
+  `priority` is never `null`: it is always an integer from 0 to 4, and any
+  other value, `null` included, makes the file invalid like any other invalid
+  field. `check` names the field and hints to set it to 0–4. `release` is
+  `null` or a non-empty single-line string without surrounding whitespace;
+  every file has the key, and a file without it is invalid like one without
+  any other fixed key. Reserve
+  top-level `## Closing Summary`, `## History`, and `## Notes` for the managed
+  sections. No project `config.json` until a real per-project setting is
+  needed.
 - **Dates and readiness.** New timestamps use UTC. `defer_until` is a UTC
   calendar date; the issue is eligible on that day. Sort `ready` by priority
   (0 highest; new issues default to 2), then creation date, then ID. `list`
@@ -334,6 +348,13 @@ contract and acceptance checks for v1.
   `priority: null` or a value outside 0–4 is reported by `check` as
   invalid with a hint naming the field, is skipped with a warning by
   `ready`, `list`, and `tree`, and is refused by `show` and every write.
+- `release 1.0` stamps every closed issue with `release: null` and prints
+  their IDs; a second `release 1.0` stamps nothing. After closing one more
+  issue, `release 1.1` stamps only it. `update ID --release 1.0` moves it
+  to `1.0` with a history entry; on an active issue it is refused.
+  `reopen` clears `release` with the former value in history. `list
+  --release 1.0` lists exactly the stamped issues. `check` reports
+  `release` on an active issue and a file without the `release` key.
 - Seed one instance of every `check` problem: a single `check` run reports
   all of them with hints and changes no byte in the registry.
 - Remove write access from a freshly cloned registry without `.lock`: all

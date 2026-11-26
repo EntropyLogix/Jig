@@ -59,17 +59,18 @@ jig start [--json|--hook-json]
 jig add TITLE [--approved] [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]
 jig ready [--json]
 jig show ID [--json]
-jig list [--status proposed|open|claimed|review|closed|all] [--sort oldest|newest] [--json]
+jig list [--status proposed|open|claimed|review|closed|all] [--release NAME] [--sort oldest|newest] [--json]
 jig tree ID [--json]
 jig approve ID
 jig revise ID --reason TEXT
 jig claim ID [--by NAME] [--force]
 jig unclaim ID
-jig update ID [--title T] [-p|--priority N] [--body TEXT|-]
+jig update ID [--title T] [-p|--priority N] [--body TEXT|-] [--release NAME]
 jig review ID [--summary TEXT]
 jig rework ID --reason TEXT
 jig close ID --reason TEXT [--summary TEXT]
 jig reopen ID --reason TEXT
+jig release NAME
 jig dep add|rm ID BLOCKER
 jig note ID TEXT [--by NAME]
 jig defer ID --until YYYY-MM-DD | --clear
@@ -132,6 +133,39 @@ sets 2. `ready` and the default `list` order issues by priority.
 A file whose `priority` is missing, `null`, or outside 0–4 is invalid:
 `jig check` reports it, `ready`, `list`, and `tree` skip it with a warning,
 `show` and writes refuse it, and a person fixes the field by hand.
+
+## Releases
+
+Plan a release with an ordinary issue and dependencies. Approve the release
+issue, then add each planned issue as a dependency:
+
+```sh
+rel=$(jig add "Release 1.3.0" --approved)
+jig dep add "$rel" ID
+jig dep add "$rel" ANOTHER_ID
+jig show "$rel"
+```
+
+The release issue shows its scope and what still blocks it. Move work to a
+different release with `jig dep rm` followed by `jig dep add`.
+
+An issue deliberately postponed stays `proposed`, because it is not work yet,
+or receives `jig defer ID --until YYYY-MM-DD`. It belongs to a release through
+the release issue's dependencies. Issues have no planning-release field.
+
+When the release ships, seal the closed issues and inspect the result:
+
+```sh
+jig release 1.3.0
+jig list --release 1.3.0
+```
+
+If `jig release 1.2.4` was forgotten, `jig release 1.2.5` seals every still
+unsealed closed issue. Correct an individual issue with
+`jig update ID --release 1.2.4`.
+
+`release` records where an issue actually shipped. It does not record planned
+scope, so it is set only on closed issues.
 
 ## Agent integrations
 

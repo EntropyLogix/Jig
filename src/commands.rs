@@ -43,18 +43,19 @@ Commands:\n\
   add TITLE [--approved] [-p|--priority N (0-4, default 2)] [--body TEXT|-] [--parent ID] [--dep ID ...]\n\
   ready [--json]                        unblocked open issues\n\
   show ID [--json]                      one full issue\n\
-  list [--status S] [--sort oldest|newest] [--json]\n\
+  list [--status S] [--release NAME] [--sort oldest|newest] [--json]\n\
                                         issues (S: proposed|open|claimed|review|closed|all)\n\
   tree ID [--json]                      issue with descendants\n\
   approve ID                            move a proposed issue to open\n\
   revise ID --reason TEXT               return an open issue to proposed\n\
   claim ID [--by NAME] [--force]        move an open issue to claimed\n\
   unclaim ID                            return a claimed issue to open\n\
-  update ID [--title T] [-p|--priority N] [--body TEXT|-]\n\
+  update ID [--title T] [-p|--priority N] [--body TEXT|-] [--release NAME]\n\
   review ID [--summary TEXT]            submit a claimed issue for review\n\
   rework ID --reason TEXT               return a review issue to claimed\n\
   close ID --reason TEXT [--summary T]  archive an active issue\n\
   reopen ID --reason TEXT               reactivate a closed issue\n\
+  release NAME                          seal closed issues with a release name\n\
   dep add|rm ID BLOCKER                 manage blockers\n\
   note ID TEXT [--by NAME]              append a one-line note\n\
   defer ID --until YYYY-MM-DD | --clear\n\
@@ -389,6 +390,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
         "rework" => cmd_rework(&tail, cwd).map(CommandOutput::plain),
         "close" => cmd_close(&tail, cwd).map(CommandOutput::plain),
         "reopen" => cmd_reopen(&tail, cwd).map(CommandOutput::plain),
+        "release" => cmd_release(&tail, cwd),
         "dep" => cmd_dep(&tail, cwd).map(CommandOutput::plain),
         "note" => cmd_note(&tail, cwd).map(CommandOutput::plain),
         "defer" => cmd_defer(&tail, cwd).map(CommandOutput::plain),
@@ -508,6 +510,7 @@ fn cmd_add(args: &[String], cwd: &Path) -> R<String> {
         created_at: Some(now.clone()),
         updated_at: Some(now),
         closed_at: None,
+        release: None,
         claim_id: None,
         body,
         history: String::new(),
@@ -702,7 +705,7 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<String> {
             Ok(format!(
                 "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
                  \"depends_on\":{},\"assignee\":{},\"defer_until\":{},\"created_at\":{},\
-                 \"updated_at\":{},\"closed_at\":{},\"body\":{},\"history\":{},\"notes\":{},\
+                 \"updated_at\":{},\"closed_at\":{},\"release\":{},\"body\":{},\"history\":{},\"notes\":{},\
                  \"closing_summary\":{}}}\n",
                 issue::esc(&i.id),
                 issue::esc(&i.title),
@@ -715,6 +718,7 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<String> {
                 jopt(&i.created_at),
                 jopt(&i.updated_at),
                 jopt(&i.closed_at),
+                jopt(&i.release),
                 issue::esc(&i.body),
                 issue::esc(&i.history),
                 issue::esc(&i.notes),
@@ -732,13 +736,33 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         &[
             ("--json", Arity::Switch, "json"),
             ("--status", Arity::One, "status"),
+            ("--release", Arity::One, "release"),
             ("--sort", Arity::One, "sort"),
         ],
         &[],
     )?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
-    let filter = opt(&p, "status").unwrap_or("active").to_string();
+    let release = opt(&p, "release");
+    if let Some(name) = release
+        && !issue::valid_release(name)
+    {
+        return Err(usage(
+            "release must be a non-empty single line without surrounding whitespace",
+        ));
+    }
+    if release.is_some()
+        && let Some(status) = opt(&p, "status")
+        && !matches!(status, "closed" | "all")
+    {
+        return Err(usage("--release requires --status closed or all"));
+    }
+    let filter = if release.is_some() {
+        opt(&p, "status").unwrap_or("closed")
+    } else {
+        opt(&p, "status").unwrap_or("active")
+    }
+    .to_string();
     if ![
         "active", "proposed", "open", "claimed", "review", "closed", "all",
     ]
@@ -763,7 +787,16 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                 || (filter == "active" && s.active())
                 || Status::parse(&filter) == Some(s)
         };
-        let mut rows: Vec<Issue> = snap.issues().filter(|i| want(i.status)).cloned().collect();
+        let mut rows: Vec<Issue> = snap
+            .issues()
+            .filter(|i| want(i.status))
+            .filter(|i| {
+                release.is_none_or(|name| {
+                    i.status == Status::Closed && i.release.as_deref() == Some(name)
+                })
+            })
+            .cloned()
+            .collect();
         match order {
             Some(order) => sort_chronologically(&mut rows, order),
             None => sort_rows(&mut rows),
@@ -987,16 +1020,31 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
             ("--priority", Arity::One, "priority"),
             ("--title", Arity::One, "title"),
             ("--body", Arity::One, "body"),
+            ("--release", Arity::One, "release"),
         ],
         &[],
     )?;
     pos_n(&p, 1, "update ID")?;
-    if opt(&p, "title").is_none() && opt(&p, "priority").is_none() && opt(&p, "body").is_none() {
+    if opt(&p, "title").is_none()
+        && opt(&p, "priority").is_none()
+        && opt(&p, "body").is_none()
+        && opt(&p, "release").is_none()
+    {
         return Err(usage("update requires at least one change"));
+    }
+    if let Some(release) = opt(&p, "release")
+        && !issue::valid_release(release)
+    {
+        return Err(usage(
+            "release must be a non-empty single line without surrounding whitespace",
+        ));
     }
     let body = body_arg(&p)?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
+    if opt(&p, "release").is_some() && l.issue.status != Status::Closed {
+        return Err(fail(format!("issue {} is not closed", l.issue.id)));
+    }
     let mut i = l.issue.clone();
     if let Some(t) = opt(&p, "title") {
         if t.is_empty() {
@@ -1009,6 +1057,18 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
     }
     if let Some(b) = body {
         i.body = b;
+    }
+    if let Some(release) = opt(&p, "release") {
+        if i.release.as_deref() != Some(release) {
+            let old = i.release.as_deref().unwrap_or("null").to_string();
+            hist_push(&mut i, hist_entry(&format!("release: {old} -> {release}")));
+            i.release = Some(release.to_string());
+        } else if opt(&p, "title").is_none()
+            && opt(&p, "priority").is_none()
+            && opt(&p, "body").is_none()
+        {
+            return Ok(format!("updated {}\n", i.id));
+        }
     }
     i.updated_at = Some(clock::now_iso());
     store::write_issue(&l, &i).map_err(fail)?;
@@ -1115,6 +1175,10 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
         entry.push_str("\n  ");
         entry.push_str(&history_text("closing summary:", &summary));
     }
+    if let Some(release) = i.release.take() {
+        entry.push_str("\n  ");
+        entry.push_str(&history_text("release:", &release));
+    }
     i.assignee = None;
     i.claim_id = None;
     i.closed_at = None;
@@ -1122,6 +1186,67 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
     hist_push(&mut i, entry);
     store::move_issue(jig, &l, &i).map_err(fail)?;
     Ok(format!("reopened {}\n", i.id))
+}
+
+fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
+    let p = parse_tail(args, &[], &[])?;
+    pos_n(&p, 1, "release NAME")?;
+    let name = &p.pos[0];
+    if !issue::valid_release(name) {
+        return Err(usage(
+            "release must be a non-empty single line without surrounding whitespace",
+        ));
+    }
+    let lock = registry(cwd)?;
+    let jig = &lock.jig;
+    let snap = check::scan(jig);
+    let warnings = file_warnings(
+        &snap,
+        |path| {
+            path.starts_with(".jig/closed")
+                && snap
+                    .records
+                    .iter()
+                    .find(|rec| rec.path == path)
+                    .is_none_or(|rec| rec.issue.release.is_none())
+        },
+        true,
+    );
+    let mut ids = Vec::new();
+    let now = clock::now_iso();
+    let mut candidates: Vec<_> = snap
+        .records
+        .iter()
+        .filter(|rec| {
+            rec.usable
+                && rec.place == Place::Closed
+                && rec.issue.release.is_none()
+                && domain::field_problems(&rec.issue).is_empty()
+        })
+        .collect();
+    candidates.sort_by(|a, b| a.path.cmp(&b.path));
+    for rec in candidates {
+        let loaded = store::find(jig, &rec.issue.id)
+            .map_err(fail)?
+            .ok_or_else(|| fail(format!("issue {} not found", rec.issue.id)))?;
+        let mut issue = loaded.issue.clone();
+        issue.release = Some(name.clone());
+        issue.updated_at = Some(now.clone());
+        store::write_issue(&loaded, &issue).map_err(fail)?;
+        ids.push(issue.id);
+    }
+    if ids.is_empty() {
+        return Ok(CommandOutput {
+            stdout: "nothing sealed\n".to_string(),
+            warnings,
+            code: 0,
+        });
+    }
+    Ok(CommandOutput {
+        stdout: format!("{}\n", ids.join("\n")),
+        warnings,
+        code: 0,
+    })
 }
 
 fn dep_graph(jig: &Path) -> R<HashMap<String, Vec<String>>> {

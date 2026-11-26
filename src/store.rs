@@ -685,7 +685,7 @@ mod tests {
         fs::create_dir(jig.join("closed")).unwrap();
         let old = "---\nid: \"B-000001\"\ntitle: \"T\"\nstatus: open\npriority: 2\nparent: null\n\
             depends_on: []\nassignee: null\ndefer_until: null\ncreated_at: null\n\
-            updated_at: null\nclosed_at: null\nclaim_id: null\n---\n\n## History\n\n## Notes\n\n";
+            updated_at: null\nclosed_at: null\nrelease: null\nclaim_id: null\n---\n\n## History\n\n## Notes\n\n";
         let new = old.replace("status: open", "status: closed");
         fs::write(jig.join("open/B-000001.md"), old).unwrap();
 

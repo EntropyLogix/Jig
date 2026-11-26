@@ -104,7 +104,7 @@ fn fm(id: &str, status: &str, extra: &str) -> String {
     format!(
         "---\nid: \"{id}\"\ntitle: \"T {id}\"\nstatus: {status}\npriority: 2\nparent: null\n\
          depends_on: []\nassignee: null\ndefer_until: null\ncreated_at: null\nupdated_at: null\n\
-         closed_at: null\nclaim_id: null\n{extra}---\n\n## History\n\n## Notes\n\n"
+         closed_at: null\nrelease: null\nclaim_id: null\n{extra}---\n\n## History\n\n## Notes\n\n"
     )
 }
 
@@ -3881,4 +3881,152 @@ fn update_priority_preserves_status_and_history() {
             );
         }
     }
+}
+
+#[test]
+fn release_seals_closed_issues_and_reopen_clears_it() {
+    let d = dir("release");
+    ok(&d, &["init", "--no-hooks"]);
+    let first = add(&d, "first");
+    let second = add(&d, "second");
+    ok(&d, &["close", &first, "--reason", "done"]);
+    ok(&d, &["close", &second, "--reason", "done"]);
+
+    let unreadable = add(&d, "unreadable");
+    ok(&d, &["close", &unreadable, "--reason", "done"]);
+    let unreadable_path = d.join(".jig/closed").join(format!("{unreadable}.md"));
+    fs::write(&unreadable_path, "not an issue file").unwrap();
+    let unreadable_before = fs::read(&unreadable_path).unwrap();
+    let inconsistent = add(&d, "inconsistent closed");
+    ok(&d, &["close", &inconsistent, "--reason", "done"]);
+    let inconsistent_path = d.join(".jig/closed").join(format!("{inconsistent}.md"));
+    let inconsistent_text = fs::read_to_string(&inconsistent_path)
+        .unwrap()
+        .replace("priority: 2", "priority: 9");
+    fs::write(&inconsistent_path, inconsistent_text).unwrap();
+    let inconsistent_before = fs::read(&inconsistent_path).unwrap();
+
+    let sealed_run = run(&d, &["release", "1.0"]);
+    assert_eq!(sealed_run.status.code(), Some(0));
+    let sealed = String::from_utf8(sealed_run.stdout).unwrap();
+    assert!(
+        sealed.contains(&first) && sealed.contains(&second),
+        "{sealed}"
+    );
+    let warnings = String::from_utf8(sealed_run.stderr).unwrap();
+    for (id, path) in [
+        (&unreadable, &unreadable_path),
+        (&inconsistent, &inconsistent_path),
+    ] {
+        let rel = format!(".jig/closed/{id}.md");
+        assert_eq!(warnings.matches(&rel).count(), 1, "{warnings}");
+        assert!(warnings.contains("jig check"), "{warnings}");
+        assert_eq!(
+            fs::read(path).unwrap(),
+            if id == &unreadable {
+                unreadable_before.clone()
+            } else {
+                inconsistent_before.clone()
+            }
+        );
+    }
+    assert_eq!(ok(&d, &["release", "1.0"]), "nothing sealed\n");
+    assert_eq!(show_value(&d, &first)["release"], "1.0");
+    let all = ok(
+        &d,
+        &["list", "--release", "1.0", "--status", "all", "--json"],
+    );
+    assert!(all.contains(&first) && all.contains(&second), "{all}");
+    let closed = ok(
+        &d,
+        &["list", "--release", "1.0", "--status", "closed", "--json"],
+    );
+    assert_eq!(closed, all);
+    let status = run(&d, &["list", "--release", "1.0", "--status", "open"]);
+    assert_eq!(status.status.code(), Some(2));
+
+    for name in [" 1.0", "1.0 "] {
+        let before = tree_bytes(&d.join(".jig"));
+        let output = run(&d, &["release", name]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("surrounding whitespace"));
+        assert_eq!(tree_bytes(&d.join(".jig")), before);
+
+        let before = tree_bytes(&d.join(".jig"));
+        let output = run(&d, &["update", &first, "--release", name]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(tree_bytes(&d.join(".jig")), before);
+
+        let before = tree_bytes(&d.join(".jig"));
+        let output = run(&d, &["list", "--release", name]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(tree_bytes(&d.join(".jig")), before);
+    }
+
+    let third = add(&d, "third");
+    ok(&d, &["close", &third, "--reason", "done"]);
+    assert_eq!(ok(&d, &["release", "1.1"]).trim(), third);
+    let listed = ok(&d, &["list", "--release", "1.0", "--json"]);
+    let listed: Vec<Value> = serde_json::from_str(&listed).unwrap();
+    let listed_ids: Vec<&str> = listed.iter().map(|v| v["id"].as_str().unwrap()).collect();
+    assert!(listed_ids.contains(&first.as_str()) && listed_ids.contains(&second.as_str()));
+    assert!(!listed_ids.contains(&third.as_str()));
+
+    let first_path = d.join(".jig/closed").join(format!("{first}.md"));
+    let before = fs::read(&first_path).unwrap();
+    ok(&d, &["update", &first, "--release", "1.0"]);
+    assert_eq!(fs::read(&first_path).unwrap(), before);
+
+    ok(&d, &["update", &first, "--release", "1.2"]);
+    let history = show_value(&d, &first)["history"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(history.contains("release: 1.0 -> 1.2"), "{history}");
+
+    let active = add(&d, "active");
+    let before = tree_bytes(&d.join(".jig"));
+    let e = bad(&d, &["update", &active, "--release", "1.2"]);
+    assert!(e.contains("not closed"), "{e}");
+    assert_eq!(tree_bytes(&d.join(".jig")), before);
+
+    ok(&d, &["reopen", &first, "--reason", "regression"]);
+    let reopened = show_value(&d, &first);
+    assert_eq!(reopened["release"], Value::Null);
+    assert!(
+        reopened["history"]
+            .as_str()
+            .unwrap()
+            .contains("release: 1.2")
+    );
+
+    let missing = d.join(".jig/open").join(format!("{active}.md"));
+    let text = fs::read_to_string(&missing)
+        .unwrap()
+        .replace("release: null\n", "");
+    fs::write(&missing, text).unwrap();
+    let inconsistent = add(&d, "inconsistent");
+    let inconsistent_path = d.join(".jig/open").join(format!("{inconsistent}.md"));
+    let text = fs::read_to_string(&inconsistent_path)
+        .unwrap()
+        .replace("release: null", "release: \"1.0\"");
+    fs::write(&inconsistent_path, text).unwrap();
+    let spaced = add(&d, "spaced release");
+    let spaced_path = d.join(".jig/open").join(format!("{spaced}.md"));
+    let text = fs::read_to_string(&spaced_path)
+        .unwrap()
+        .replace("release: null", "release: \" 1.0\"");
+    fs::write(&spaced_path, text).unwrap();
+    let report = run(&d, &["check", "--json"]);
+    assert_eq!(report.status.code(), Some(1));
+    let report = String::from_utf8(report.stdout).unwrap();
+    assert!(
+        report.contains("missing frontmatter key \\\"release\\\""),
+        "{report}"
+    );
+    assert!(report.contains("active issue has release"), "{report}");
+    assert!(
+        report.contains("release must be a non-empty single line without surrounding whitespace"),
+        "{report}"
+    );
 }

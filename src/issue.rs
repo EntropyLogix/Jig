@@ -49,6 +49,7 @@ pub struct Issue {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub closed_at: Option<String>,
+    pub release: Option<String>,
     pub claim_id: Option<String>,
     pub body: String,
     pub history: String,
@@ -58,7 +59,7 @@ pub struct Issue {
 
 pub(crate) const BAD_PRIORITY: &str = "field priority must be an integer from 0 to 4";
 
-const KEYS: [&str; 12] = [
+const KEYS: [&str; 13] = [
     "id",
     "title",
     "status",
@@ -70,6 +71,7 @@ const KEYS: [&str; 12] = [
     "created_at",
     "updated_at",
     "closed_at",
+    "release",
     "claim_id",
 ];
 
@@ -78,6 +80,10 @@ pub fn valid_label(text: &str) -> bool {
         && !text
             .chars()
             .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+}
+
+pub fn valid_release(text: &str) -> bool {
+    valid_label(text) && text.trim() == text
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -190,6 +196,7 @@ pub fn encode(issue: &Issue) -> Result<String, String> {
     field_opt(&mut out, "created_at", &issue.created_at);
     field_opt(&mut out, "updated_at", &issue.updated_at);
     field_opt(&mut out, "closed_at", &issue.closed_at);
+    field_opt(&mut out, "release", &issue.release);
     field_opt(&mut out, "claim_id", &issue.claim_id);
     out.push_str("---\n\n");
     if let Some(summary) = &issue.closing_summary {
@@ -237,6 +244,13 @@ fn validate(issue: &Issue) -> Result<(), String> {
         && !valid_label(a)
     {
         return Err("assignee must be a non-empty single line".to_string());
+    }
+    if let Some(release) = &issue.release
+        && !valid_release(release)
+    {
+        return Err(
+            "release must be a non-empty single line without surrounding whitespace".to_string(),
+        );
     }
     if issue.parent.as_deref() != issue.id.rsplit_once('.').map(|(parent, _)| parent) {
         return Err("parent must match the dotted issue id".to_string());
@@ -689,6 +703,7 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
     let created_at = want_opt(get("created_at"), "created_at")?;
     let updated_at = want_opt(get("updated_at"), "updated_at")?;
     let closed_at = want_opt(get("closed_at"), "closed_at")?;
+    let release = want_opt(get("release"), "release")?;
     let claim_id = want_opt(get("claim_id"), "claim_id")?;
 
     let mut pos = usize::from(rest.starts_with('\n'));
@@ -744,6 +759,7 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
         created_at,
         updated_at,
         closed_at,
+        release,
         claim_id,
         body,
         history,
