@@ -405,14 +405,15 @@ fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 0, "no positional arguments")?;
     let created = store::init(cwd).map_err(fail)?;
     let _lock = registry(cwd)?;
-    let customized = integration::install(cwd, !flag(&p, "no-hooks")).map_err(fail)?;
+    let notice = integration::install(cwd, !flag(&p, "no-hooks")).map_err(fail)?;
     let mut out = if created {
         "initialized .jig/\n".to_string()
     } else {
         ".jig/ already initialized\n".to_string()
     };
-    if customized {
-        out.push_str("AGENTS.md: Jig instructions are customized; left unchanged\n");
+    if let Some(notice) = notice {
+        out.push_str(&notice);
+        out.push('\n');
     }
     Ok(out)
 }

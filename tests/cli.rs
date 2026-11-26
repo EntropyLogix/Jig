@@ -2340,29 +2340,29 @@ fn seeded_body_variations_roundtrip_or_refuse() {
         for _ in 0..1 + (rng.next() % 4) {
             match rng.next() % 8 {
                 0..=4 => {
-                    body.push_str(rng.pick(SAFE));
+                    body.push_str(rng.pick::<&str>(SAFE));
                     body.push('\n');
                 }
                 5 => {
                     body.push_str("```\n");
-                    body.push_str(rng.pick(FENCED));
+                    body.push_str(rng.pick::<&str>(FENCED));
                     body.push_str("\n```\n");
                 }
                 6 => {
                     body.push_str("~~~~\n");
-                    body.push_str(rng.pick(FENCED));
+                    body.push_str(rng.pick::<&str>(FENCED));
                     body.push_str("\n~~~~\n");
                 }
                 _ => {
                     accept = false;
-                    body.push_str(rng.pick(POISON));
+                    body.push_str(rng.pick::<&str>(POISON));
                     body.push('\n');
                 }
             }
         }
         if case % 3 == 0 && accept {
             accept = false;
-            body.push_str(rng.pick(POISON));
+            body.push_str(rng.pick::<&str>(POISON));
             body.push('\n');
         }
         let before = fs::read_to_string(&file).unwrap();
@@ -3335,8 +3335,10 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         );
         assert!(out.contains("run `jig init`"), "{out}");
         let old = fs::read_to_string(d.join("AGENTS.md")).unwrap();
-        let out = ok(&d, &["init", "--no-hooks"]);
-        assert!(!out.contains("customized"), "{out}");
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            ".jig/ already initialized\n"
+        );
         let new = fs::read_to_string(d.join("AGENTS.md")).unwrap();
         assert_eq!(new, format!("{old}{nl}{canon}{nl}"), "append: {new}");
 
@@ -3345,7 +3347,10 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let d = fixture("ag-cur", file.clone());
         let out = check_unchanged(&d, 0);
         assert!(out.contains("clean"), "{out}");
-        ok(&d, &["init", "--no-hooks"]);
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            ".jig/ already initialized\n"
+        );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // older intact: check reports outdated, init upgrades surgically
@@ -3353,8 +3358,10 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let d = fixture("ag-old", format!("{pre}{older}"));
         let out = check_unchanged(&d, 1);
         assert!(out.contains("Jig instructions are outdated"), "{out}");
-        let out = ok(&d, &["init", "--no-hooks"]);
-        assert!(!out.contains("customized"), "{out}");
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            ".jig/ already initialized\n"
+        );
         assert_eq!(
             fs::read_to_string(d.join("AGENTS.md")).unwrap(),
             format!("{pre}{canon}"),
@@ -3363,7 +3370,10 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let out = check_unchanged(&d, 0);
         assert!(out.contains("clean"), "{out}");
         let before = fs::read(d.join("AGENTS.md")).unwrap();
-        ok(&d, &["init", "--no-hooks"]);
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            ".jig/ already initialized\n"
+        );
         assert_eq!(
             fs::read(d.join("AGENTS.md")).unwrap(),
             before,
@@ -3380,7 +3390,10 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let out = check_unchanged(&d, 1);
         assert!(out.contains("Jig instructions are outdated"), "{out}");
         assert!(!out.contains("customized"), "{out}");
-        ok(&d, &["init", "--no-hooks"]);
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            ".jig/ already initialized\n"
+        );
         assert_eq!(
             fs::read_to_string(d.join("AGENTS.md")).unwrap(),
             format!("{pre}{canon}{post}")
@@ -3395,10 +3408,9 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let d = fixture("ag-ccu", file.clone());
         let out = check_unchanged(&d, 0);
         assert!(out.contains("clean"), "{out}");
-        let out = ok(&d, &["init", "--no-hooks"]);
-        assert!(
-            out.contains("AGENTS.md: Jig instructions are customized; left unchanged"),
-            "{out}"
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            ".jig/ already initialized\nAGENTS.md: Jig instructions are customized; left unchanged\n"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
@@ -3409,25 +3421,36 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         );
         let file = format!("{pre}{custom_old}{post}");
         let d = fixture("ag-ocu", file.clone());
-        let out = check_unchanged(&d, 1);
+        let report = check_unchanged(&d, 1);
         assert!(
-            out.contains("customized Jig instructions are outdated"),
-            "{out}"
+            report.contains("customized Jig instructions are outdated"),
+            "{report}"
         );
-        assert!(out.contains("reapply"), "{out}");
-        let out = ok(&d, &["init", "--no-hooks"]);
-        assert!(out.contains("customized"), "{out}");
+        assert!(report.contains("reapply"), "{report}");
+        assert_eq!(
+            ok(&d, &["init", "--no-hooks"]),
+            format!(".jig/ already initialized\n{report}"),
+            "init must repeat the check report for NeedsAttention"
+        );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
-        // newer version: check reports unsupported, init never downgrades
-        let newer = canon.replace("<!-- BEGIN JIG v:1 ", "<!-- BEGIN JIG v:2 ");
-        let file = format!("{pre}{newer}{post}");
-        let d = fixture("ag-new", file.clone());
-        let out = check_unchanged(&d, 1);
-        assert!(out.contains("version 2") && out.contains("newer"), "{out}");
-        let out = ok(&d, &["init", "--no-hooks"]);
-        assert!(!out.contains("customized"), "{out}");
-        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+        // newer version (intact and customized): same unsupported report
+        for (name, seed) in [("ag-new", &canon), ("ag-newc", &custom)] {
+            let newer = seed.replace("<!-- BEGIN JIG v:1 ", "<!-- BEGIN JIG v:2 ");
+            let file = format!("{pre}{newer}{post}");
+            let d = fixture(name, file.clone());
+            let report = check_unchanged(&d, 1);
+            assert!(
+                report.contains("version 2") && report.contains("newer"),
+                "{report}"
+            );
+            assert_eq!(
+                ok(&d, &["init", "--no-hooks"]),
+                format!(".jig/ already initialized\n{report}"),
+                "{name}: init never downgrades"
+            );
+            assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+        }
 
         // malformed and duplicated markers: check reports, init refuses
         for (name, file) in [
@@ -3444,8 +3467,14 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
                 out.contains("malformed or duplicated Jig instruction markers"),
                 "{name}: {out}"
             );
-            let e = bad(&d, &["init", "--no-hooks"]);
-            assert!(e.contains("malformed or duplicated"), "{name}: {e}");
+            let o = run(&d, &["init", "--no-hooks"]);
+            assert_eq!(o.status.code(), Some(1), "{name}");
+            assert!(
+                String::from_utf8_lossy(&o.stderr)
+                    .contains("AGENTS.md: malformed or duplicated Jig instruction markers"),
+                "{name}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
             assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
         }
     }
@@ -3472,7 +3501,10 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
         "Jig workflow",
         "tracks work with `jig`",
         "Do not keep task lists",
-        "cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v1.0.0",
+        concat!(
+            "cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v",
+            env!("CARGO_PKG_VERSION")
+        ),
         "https://github.com/EntropyLogix/Jig",
         "jig start` for the workflow",
         "jig ready` lists approved, unblocked work",

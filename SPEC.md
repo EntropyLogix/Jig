@@ -179,12 +179,19 @@ contract and acceptance checks for v1.
   and the hash matches the text, the block is unmodified: `init` replaces
   an older version with the current one and leaves a current one alone.
   When the hash does not match, a person edited the block: `init` leaves
-  it untouched and reports that it is customized. Malformed or duplicated
-  markers refuse the edit, as before.
+  it untouched and reports that it is customized. A block of a newer
+  version than this `jig` supports is left untouched. Malformed or
+  duplicated markers refuse the edit, as before.
 - `check` reports a missing block and an outdated unmodified block (hint:
   `jig init`). A customized block of the current version is not a problem.
   A customized block of an older version is reported with the hint to
-  remove the block, run `jig init`, and reapply the local edits.
+  remove the block, run `jig init`, and reapply the local edits. A block of
+  a newer version is reported with the hint to update `jig`.
+- Whenever `init` leaves an existing block untouched in a state that
+  `check` reports, `init` prints the same problem and hint, prefixed with
+  `AGENTS.md:`, and still exits 0. A refusal also names `AGENTS.md`.
+- The block text of a released version `N` never changes. Any change to the
+  text, apart from the substituted `jig` version, comes with `N + 1`.
 - The block text tells agents, in this order:
   - the project tracks work with `jig` and keeps no task lists in other
     Markdown or TODO files;
@@ -309,9 +316,11 @@ contract and acceptance checks for v1.
   issue fails. Add a file with merge conflict markers: `ready`, `list`, and
   `tree` still list every other issue, warn, and exit 0.
 - Run `init` on a project with an older unmodified block, a customized
-  block, and no block: the first is upgraded, the second is left
-  byte-for-byte, the third is appended; `check` reports exactly the cases
-  described in Agent Instructions Block.
+  block, a newer block, and no block: the first is upgraded, the second and
+  third are left byte-for-byte, the fourth is appended; `init` and `check`
+  report exactly the cases described in Agent Instructions Block.
+- The full test suite builds and passes on the declared minimum Rust
+  version as well as on current stable.
 - Seed one instance of every `check` problem: a single `check` run reports
   all of them with hints and changes no byte in the registry.
 - Remove write access from a freshly cloned registry without `.lock`: all

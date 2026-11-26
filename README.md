@@ -190,6 +190,7 @@ byte-for-byte.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --lib --test cli
+cargo +1.89 test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
 

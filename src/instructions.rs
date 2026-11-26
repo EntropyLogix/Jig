@@ -1,4 +1,5 @@
 use crate::store;
+use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
 
@@ -146,21 +147,55 @@ fn append(text: &str) -> String {
     out
 }
 
-pub(crate) fn update(text: &str) -> Result<(Option<String>, bool), String> {
-    match locate(text)? {
-        None => Ok((Some(append(text)), false)),
-        Some(b) if b.customized => Ok((None, true)),
-        Some(b) if b.version == VERSION => Ok((None, false)),
-        Some(b) if b.version < VERSION => {
-            let newline = if b.crlf { "\r\n" } else { "\n" };
-            let block = block_text(newline);
-            Ok((
-                Some(format!("{}{block}{}", &text[..b.start], &text[b.end..])),
-                false,
-            ))
-        }
-        Some(_) => Ok((None, false)),
+pub(crate) enum Update {
+    Write(String),
+    Unchanged,
+    Customized,
+    NeedsAttention { problem: String, hint: &'static str },
+}
+
+fn existing_problem(block: &ManagedBlock) -> Option<(String, &'static str)> {
+    match (block.version.cmp(&VERSION), block.customized) {
+        (Ordering::Greater, _) => Some((
+            format!(
+                "Jig instructions block version {} is newer than supported version {VERSION}",
+                block.version
+            ),
+            "use a version of jig that understands that block version",
+        )),
+        (Ordering::Less, true) => Some((
+            "customized Jig instructions are outdated".to_string(),
+            "remove the managed block, run `jig init`, and reapply your local edits",
+        )),
+        (Ordering::Less, false) => Some((
+            "Jig instructions are outdated".to_string(),
+            "run `jig init` to update the instructions",
+        )),
+        (Ordering::Equal, _) => None,
     }
+}
+
+pub(crate) fn update(text: &str) -> Result<Update, String> {
+    let Some(b) = locate(text)? else {
+        return Ok(Update::Write(append(text)));
+    };
+    if b.version < VERSION && !b.customized {
+        let newline = if b.crlf { "\r\n" } else { "\n" };
+        let block = block_text(newline);
+        return Ok(Update::Write(format!(
+            "{}{block}{}",
+            &text[..b.start],
+            &text[b.end..]
+        )));
+    }
+    if let Some((problem, hint)) = existing_problem(&b) {
+        return Ok(Update::NeedsAttention { problem, hint });
+    }
+    Ok(if b.customized {
+        Update::Customized
+    } else {
+        Update::Unchanged
+    })
 }
 
 pub(crate) fn problem(root: &Path) -> Option<(String, &'static str)> {
@@ -184,21 +219,31 @@ pub(crate) fn problem(root: &Path) -> Option<(String, &'static str)> {
             "Jig instructions are missing".to_string(),
             "run `jig init` to add the instructions",
         )),
-        Ok(Some(b)) if b.version > VERSION => Some((
-            format!(
-                "Jig instructions block version {} is newer than supported version {VERSION}",
-                b.version
-            ),
-            "use a version of jig that understands that block version",
-        )),
-        Ok(Some(b)) if b.version < VERSION && b.customized => Some((
-            "customized Jig instructions are outdated".to_string(),
-            "remove the managed block, run `jig init`, and reapply your local edits",
-        )),
-        Ok(Some(b)) if b.version < VERSION => Some((
-            "Jig instructions are outdated".to_string(),
-            "run `jig init` to update the instructions",
-        )),
-        Ok(Some(_)) => None,
+        Ok(Some(b)) => existing_problem(&b),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn released_block_fingerprint_requires_version_bump() {
+        let tag = concat!("--tag v", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            BLOCK.matches(tag).count(),
+            1,
+            "expected one generated installation tag"
+        );
+        let stable = BLOCK.replace(tag, "--tag v<PACKAGE_VERSION>");
+        let expected = match VERSION {
+            1 => 0xb1d9_38a8_c6fe_41d1,
+            v => panic!("Record the block fingerprint for VERSION {v}"),
+        };
+        assert_eq!(
+            content_hash(&stable),
+            expected,
+            "Changing the Jig instructions requires bumping VERSION and recording the new fingerprint"
+        );
     }
 }
