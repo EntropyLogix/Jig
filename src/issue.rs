@@ -41,7 +41,7 @@ pub struct Issue {
     pub id: String,
     pub title: String,
     pub status: Status,
-    pub priority: Option<u8>,
+    pub priority: u8,
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
     pub assignee: Option<String>,
@@ -55,6 +55,8 @@ pub struct Issue {
     pub notes: String,
     pub closing_summary: Option<String>,
 }
+
+pub(crate) const BAD_PRIORITY: &str = "field priority must be an integer from 0 to 4";
 
 const KEYS: [&str; 12] = [
     "id",
@@ -173,10 +175,7 @@ pub fn encode(issue: &Issue) -> Result<String, String> {
     out.push_str("status: ");
     out.push_str(issue.status.as_str());
     out.push('\n');
-    match issue.priority {
-        Some(p) => out.push_str(&format!("priority: {p}\n")),
-        None => out.push_str("priority: null\n"),
-    }
+    out.push_str(&format!("priority: {}\n", issue.priority));
     field_opt(&mut out, "parent", &issue.parent);
     if issue.depends_on.is_empty() {
         out.push_str("depends_on: []\n");
@@ -231,8 +230,8 @@ fn validate(issue: &Issue) -> Result<(), String> {
     if !valid_label(&issue.title) {
         return Err("title must be a non-empty single line".to_string());
     }
-    if issue.priority.is_some_and(|p| p > 4) {
-        return Err("priority must be in 0..=4".to_string());
+    if issue.priority > 4 {
+        return Err(BAD_PRIORITY.to_string());
     }
     if let Some(a) = &issue.assignee
         && !valid_label(a)
@@ -371,15 +370,22 @@ enum Value {
     Null,
     Str(String),
     List(Vec<String>),
+    Priority(u8),
 }
 
 fn parse_value(raw: &str, key: &str) -> Result<Value, String> {
     let s = raw.trim_matches([' ', '\t']);
+    if key == "priority" {
+        return match s.as_bytes() {
+            [p @ b'0'..=b'4'] => Ok(Value::Priority(p - b'0')),
+            _ => Err(format!("{BAD_PRIORITY}; got {s:?}")),
+        };
+    }
     if s == "null" {
         return Ok(Value::Null);
     }
     if s.starts_with('"') {
-        if key == "status" || key == "priority" {
+        if key == "status" {
             return Err(format!("field {key} must be a plain scalar"));
         }
         let mut pos = 0usize;
@@ -418,10 +424,6 @@ fn parse_value(raw: &str, key: &str) -> Result<Value, String> {
             }
             Ok(Value::Str(s.to_string()))
         }
-        "priority" => match s.as_bytes() {
-            [b'0'..=b'4'] => Ok(Value::Str(s.to_string())),
-            _ => Err(format!("invalid priority for field {key}: {s:?}")),
-        },
         _ => Err(format!(
             "field {key} must be null or a double-quoted string"
         )),
@@ -674,13 +676,8 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
         _ => return Err("field status must be a string".to_string()),
     };
     let status = Status::parse(&status_raw).ok_or("invalid status value")?;
-    let priority = match get("priority") {
-        Value::Null => None,
-        Value::Str(s) => Some(match s.as_bytes() {
-            [p @ b'0'..=b'4'] => p - b'0',
-            _ => return Err(format!("invalid priority {s:?}")),
-        }),
-        _ => return Err("invalid priority".to_string()),
+    let Value::Priority(priority) = get("priority") else {
+        return Err(BAD_PRIORITY.to_string());
     };
     let parent = want_opt(get("parent"), "parent")?;
     let depends_on = match get("depends_on") {

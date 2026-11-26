@@ -40,7 +40,7 @@ Usage: jig [--json] COMMAND [ARGS]\n\
 Commands:\n\
   init [--no-hooks]                    create .jig/, AGENTS.md, and project hooks\n\
   start [--json|--hook-json]            workflow summary\n\
-  add TITLE [--approved] [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]\n\
+  add TITLE [--approved] [-p|--priority N (0-4, default 2)] [--body TEXT|-] [--parent ID] [--dep ID ...]\n\
   ready [--json]                        unblocked open issues\n\
   show ID [--json]                      one full issue\n\
   list [--status S] [--sort oldest|newest] [--json]\n\
@@ -271,9 +271,7 @@ fn row_json(i: &Issue) -> String {
         issue::esc(&i.id),
         issue::esc(&i.title),
         issue::esc(i.status.as_str()),
-        i.priority
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| "null".into()),
+        i.priority,
         jopt(&i.assignee)
     )
 }
@@ -281,13 +279,13 @@ fn row_json(i: &Issue) -> String {
 fn sort_rows(rows: &mut [Issue]) {
     rows.sort_by(|a, b| {
         (
-            a.priority.unwrap_or(u8::MAX),
+            a.priority,
             a.created_at.is_none(),
             a.created_at.clone().unwrap_or_default(),
             &a.id,
         )
             .cmp(&(
-                b.priority.unwrap_or(u8::MAX),
+                b.priority,
                 b.created_at.is_none(),
                 b.created_at.clone().unwrap_or_default(),
                 &b.id,
@@ -467,10 +465,10 @@ fn cmd_add(args: &[String], cwd: &Path) -> R<String> {
     if !issue::valid_label(title) {
         return Err(usage("title must be a non-empty single line"));
     }
-    let priority = match opt(&p, "priority") {
-        Some(v) => Some(parse_priority(v)?),
-        None => Some(2),
-    };
+    let priority = opt(&p, "priority")
+        .map(parse_priority)
+        .transpose()?
+        .unwrap_or(2);
     let body = body_arg(&p)?.unwrap_or_default();
     let lock = registry(cwd)?;
     let jig = lock.jig.clone();
@@ -626,11 +624,7 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         } else {
             let mut out = String::new();
             for i in &rows {
-                let pri = i
-                    .priority
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "-".into());
-                out.push_str(&format!("{} {pri} {}\n", i.id, i.title));
+                out.push_str(&format!("{} {} {}\n", i.id, i.priority, i.title));
             }
             out
         };
@@ -713,9 +707,7 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<String> {
                 issue::esc(&i.id),
                 issue::esc(&i.title),
                 issue::esc(i.status.as_str()),
-                i.priority
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "null".into()),
+                i.priority,
                 jopt(&i.parent),
                 deps,
                 jopt(&i.assignee),
@@ -782,10 +774,7 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         } else {
             let mut out = String::new();
             for i in &rows {
-                let pri = i
-                    .priority
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "-".into());
+                let pri = i.priority;
                 let who = i.assignee.clone().unwrap_or_else(|| "-".into());
                 let created = order
                     .map(|_| format!(" {}", i.created_at.as_deref().unwrap_or("-")))
@@ -1016,7 +1005,7 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
         i.title = t.to_string();
     }
     if let Some(v) = opt(&p, "priority") {
-        i.priority = Some(parse_priority(v)?);
+        i.priority = parse_priority(v)?;
     }
     if let Some(b) = body {
         i.body = b;

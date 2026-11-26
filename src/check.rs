@@ -131,11 +131,14 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             claimants.entry(stem).or_default().push(path.clone());
             match store::read_issue_file(&ent.path()) {
                 Err(e) => {
-                    problems.push(Problem::at(
-                        path,
-                        e,
-                        "fix the file or restore it from version control",
-                    ));
+                    let hint = if e.starts_with(crate::issue::BAD_PRIORITY)
+                        || e == "missing frontmatter key \"priority\""
+                    {
+                        "set the `priority` field to an integer from 0 to 4"
+                    } else {
+                        "fix the file or restore it from version control"
+                    };
+                    problems.push(Problem::at(path, e, hint));
                 }
                 Ok((issue, _)) => {
                     if issue.id != name[..name.len() - 3] {

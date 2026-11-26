@@ -718,8 +718,6 @@ fn codec_domain() {
         .map(|l| {
             if l.starts_with("created_at:") {
                 "created_at: \"2020-05-04\"".to_string()
-            } else if l.starts_with("priority:") {
-                "priority: null".to_string()
             } else if l == format!("id: \"{id}\"") {
                 "id: \"B440.2\"".to_string()
             } else if l == "parent: null" {
@@ -734,7 +732,7 @@ fn codec_domain() {
     let i =
         jig::issue::decode(&fs::read_to_string(d.join(".jig/open/B440.2.md")).unwrap()).unwrap();
     assert_eq!(i.id, "B440.2");
-    assert_eq!(i.priority, None);
+    assert_eq!(i.priority, 2);
     assert_eq!(i.created_at.as_deref(), Some("2020-05-04"));
 
     assert!(jig::issue::valid_id("B-abcdef"));
@@ -1698,7 +1696,7 @@ fn option_parsing_edges() {
         let i =
             jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
                 .unwrap();
-        assert_eq!(i.priority, Some(v.parse::<u8>().unwrap()));
+        assert_eq!(i.priority, v.parse::<u8>().unwrap());
     }
     let id = add(&d, "u");
     let e = bad(&d, &["update", &id, "-p", "9"]);
@@ -3501,6 +3499,8 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
         "Jig workflow",
         "tracks work with `jig`",
         "Do not keep task lists",
+        "built-in todo or plan tool",
+        "anything that must outlive this session in `jig`",
         concat!(
             "cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v",
             env!("CARGO_PKG_VERSION")
@@ -3736,5 +3736,149 @@ fn inconsistent_fields_are_readable_but_not_writable_or_claimable() {
                 .any(|p| p["problem"].as_str().unwrap().contains("unresolved")),
             "{kind} no unresolved references: {problems}"
         );
+    }
+}
+
+#[test]
+fn required_priority_across_cli_commands() {
+    let d = dir("prireq");
+    ok(&d, &["init", "--no-hooks"]);
+    let root = "B-a00000";
+    let good = "B-a00000.1";
+    let child = "B-a00000.2";
+    fs::write(d.join(".jig/open/B-a00000.md"), fm(root, "open", "")).unwrap();
+    fs::write(
+        d.join(format!(".jig/open/{good}.md")),
+        fm(good, "open", "").replace("parent: null", &format!("parent: \"{root}\"")),
+    )
+    .unwrap();
+
+    let id = ok(&d, &["add", "default priority"]).trim().to_string();
+    let file = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
+    assert!(
+        file.lines().any(|l| l == "priority: 2"),
+        "add without -p must store priority: 2: {file}"
+    );
+    let j = show_value(&d, id.as_str());
+    assert_eq!(
+        j["priority"],
+        json!(2),
+        "show --json priority must be numeric"
+    );
+    fs::remove_file(d.join(format!(".jig/open/{id}.md"))).unwrap();
+
+    let values = ["null", "5", "-1", "\"2\"", "2.0", "", "\"\"", "[]"];
+    for value in values.map(Some).into_iter().chain([None]) {
+        let (value, line) = match value {
+            Some(v) => (v, format!("priority: {v}\n")),
+            None => ("<missing>", String::new()),
+        };
+        let path = format!(".jig/open/{child}.md");
+        fs::write(
+            d.join(&path),
+            fm(child, "open", "")
+                .replace("priority: 2\n", &line)
+                .replace("parent: null", &format!("parent: \"{root}\"")),
+        )
+        .unwrap();
+
+        let o = run(&d, &["check", "--json"]);
+        assert_eq!(o.status.code(), Some(1), "{value}");
+        let stdout = String::from_utf8(o.stdout).unwrap();
+        let problems: Vec<Value> = serde_json::from_str(&stdout).unwrap();
+        let p = problems
+            .iter()
+            .find(|p| p["path"].as_str() == Some(path.as_str()))
+            .unwrap_or_else(|| panic!("{value}: no problem for {path}: {stdout}"));
+        for key in ["problem", "hint"] {
+            let text = p[key].as_str().unwrap();
+            assert!(text.contains("priority"), "{value} {key}: {text}");
+            if key == "hint" || !line.is_empty() {
+                assert!(text.contains("0 to 4"), "{value} {key}: {text}");
+            }
+        }
+
+        for args in [
+            vec!["ready"],
+            vec!["list"],
+            vec!["list", "--json"],
+            vec!["tree", root],
+        ] {
+            let o = run(&d, &args);
+            assert!(o.status.success(), "{value} {args:?}");
+            let stdout = String::from_utf8(o.stdout).unwrap();
+            let (want_r, want_g, bad_tok) = if args.contains(&"--json") {
+                (
+                    format!("\"id\":\"{root}\""),
+                    format!("\"id\":\"{good}\""),
+                    format!("\"id\":\"{child}\""),
+                )
+            } else {
+                (format!("{root} "), format!("{good} "), format!("{child} "))
+            };
+            assert!(stdout.contains(&want_r), "{value} {args:?}: {stdout}");
+            assert!(stdout.contains(&want_g), "{value} {args:?}: {stdout}");
+            assert!(!stdout.contains(&bad_tok), "{value} {args:?}: {stdout}");
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            assert_eq!(
+                stderr.matches(path.as_str()).count(),
+                1,
+                "{value} {args:?} must warn {path} once: {stderr}"
+            );
+            assert!(stderr.contains("jig check"), "{value} {args:?}: {stderr}");
+        }
+
+        assert!(!run(&d, &["show", child]).status.success(), "{value} show");
+        assert!(!run(&d, &["tree", child]).status.success(), "{value} tree");
+        let before = tree_bytes(&d.join(".jig"));
+        assert!(
+            !run(&d, &["update", child, "-p", "2"]).status.success(),
+            "{value} update must refuse"
+        );
+        assert_eq!(
+            tree_bytes(&d.join(".jig")),
+            before,
+            "{value} refused write changed .jig"
+        );
+    }
+}
+
+#[test]
+fn update_priority_preserves_status_and_history() {
+    for status in ["proposed", "open", "claimed", "review", "closed"] {
+        let d = dir(&format!("priupd{status}"));
+        ok(&d, &["init", "--no-hooks"]);
+        let id = "B-a10000";
+        let mut text = fm(id, status, "");
+        if status == "claimed" {
+            text = text
+                .replace("assignee: null", "assignee: \"bot\"")
+                .replace("claim_id: null", "claim_id: \"c1\"");
+        }
+        if status == "closed" {
+            text = text.replace("closed_at: null", "closed_at: \"2026-01-01\"");
+        }
+        text = text.replace(
+            "## History\n\n",
+            "## History\n\n- 2026-01-01T00:00:00Z seeded\n\n",
+        );
+        let place = if status == "closed" { "closed" } else { "open" };
+        fs::write(d.join(format!(".jig/{place}/{id}.md")), &text).unwrap();
+
+        for p in ["0", "4"] {
+            ok(&d, &["update", id, "-p", p]);
+            let i = show_value(&d, id);
+            assert_eq!(
+                i["priority"],
+                json!(p.parse::<u8>().unwrap()),
+                "{status} -p {p}"
+            );
+            assert_eq!(i["status"].as_str().unwrap(), status, "{status}");
+            assert_eq!(
+                i["history"].as_str().unwrap(),
+                "- 2026-01-01T00:00:00Z seeded",
+                "{status} history must be untouched"
+            );
+        }
     }
 }

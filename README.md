@@ -126,6 +126,13 @@ date rather than priority. Unknown creation dates sort last in either
 direction. The text view includes the stored creation date; JSON keeps the
 same fields.
 
+Every issue has a `priority` from 0 (highest) to 4; `jig add` without `-p`
+sets 2. `ready` and the default `list` order issues by priority.
+`jig update ID -p N` changes it in any status and records no history entry.
+A file whose `priority` is missing, `null`, or outside 0–4 is invalid:
+`jig check` reports it, `ready`, `list`, and `tree` skip it with a warning,
+`show` and writes refuse it, and a person fixes the field by hand.
+
 ## Agent integrations
 
 `jig init` installs agent integration into the project by default, so running

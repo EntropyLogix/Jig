@@ -12,7 +12,7 @@ macro_rules! text {
         concat!(
             $heading,
             "\n\n",
-            "This project tracks work with `jig`. Do not keep task lists in other Markdown or TODO files.\n",
+            "This project tracks work with `jig`. Do not keep task lists in other Markdown or TODO files. Your built-in todo or plan tool is only for the steps of the current task; record anything that must outlive this session in `jig`.\n",
             "If `jig` is not installed, ask a person to install it: `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v",
             env!("CARGO_PKG_VERSION"),
             "` (https://github.com/EntropyLogix/Jig).\n\n",
@@ -237,7 +237,7 @@ mod tests {
         );
         let stable = BLOCK.replace(tag, "--tag v<PACKAGE_VERSION>");
         let expected = match VERSION {
-            1 => 0xb1d9_38a8_c6fe_41d1,
+            1 => 0x900e_fec6_b6e4_2fd2,
             v => panic!("Record the block fingerprint for VERSION {v}"),
         };
         assert_eq!(

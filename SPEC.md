@@ -71,6 +71,10 @@ contract and acceptance checks for v1.
   work. `add` creates a `proposed` issue, including subtasks created with
   `--parent`; `add --approved` creates it directly as `open`. Agents create
   issues without `--approved`; approving is a human action.
+- Every issue has a priority from 0 (highest) to 4; there is no issue
+  without a priority. `add` without `-p` sets 2. People set the intended
+  priority with `update ID -p N`, typically when approving. `update -p`
+  works in every status and adds no history entry.
 - `approve ID` moves a `proposed` issue to `open` and records a history
   entry. `revise ID --reason TEXT` returns an `open` issue to `proposed`
   when its approved contract has to be reworked before anyone starts on
@@ -194,7 +198,9 @@ contract and acceptance checks for v1.
   text, apart from the substituted `jig` version, comes with `N + 1`.
 - The block text tells agents, in this order:
   - the project tracks work with `jig` and keeps no task lists in other
-    Markdown or TODO files;
+    Markdown or TODO files; the agent's built-in todo or plan tool holds
+    only the steps of the current task, and anything that must outlive the
+    session goes to `jig`;
   - `jig` comes from `https://github.com/EntropyLogix/Jig`; if it is not
     installed, ask a person to install it with
     `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag vX.Y.Z`,
@@ -250,7 +256,10 @@ contract and acceptance checks for v1.
   `priority`, `parent`, `depends_on`, `assignee`, `defer_until`, `created_at`,
   `updated_at`, and `closed_at`. Add a nullable `claim_id` to distinguish
   independent claims, even with identical or absent assignee labels. Use
-  `null` for unset scalar fields and `[]` for no dependencies. Reserve
+  `null` for unset scalar fields and `[]` for no dependencies. `priority`
+  is never `null`: it is always an integer from 0 to 4, and any other
+  value, `null` included, makes the file invalid like any other invalid
+  field. `check` names the field and hints to set it to 0–4. Reserve
   top-level `## Closing Summary`, `## History`, and `## Notes` for the
   managed sections.
   No project `config.json` until a real per-project setting is needed.
@@ -282,9 +291,9 @@ contract and acceptance checks for v1.
   match the recorded operation, report the conflict instead of guessing.
   A normal command never observes a half-completed move as a valid issue.
 - **Legacy metadata.** Preserve dates known only to the day without inventing
-  hours. Use `null` for unknown timestamps or priorities, preserving the
-  original wording in the body. Sort unknown priority or date after known
-  values on its respective sort key.
+  hours. Use `null` for unknown timestamps, preserving the original wording
+  in the body, and sort unknown dates after known ones. An importer sets a
+  missing or unrecognized priority to 2.
 - **Platform and dependencies.** Start with macOS and Linux. Use Rust's
   standard file locking, with no extra locking dependency. Choose and
   approve any external argument, serialization, or hashing libraries before
@@ -321,6 +330,10 @@ contract and acceptance checks for v1.
   report exactly the cases described in Agent Instructions Block.
 - The full test suite builds and passes on the declared minimum Rust
   version as well as on current stable.
+- `add` without `-p` stores priority 2. An issue file with
+  `priority: null` or a value outside 0–4 is reported by `check` as
+  invalid with a hint naming the field, is skipped with a warning by
+  `ready`, `list`, and `tree`, and is refused by `show` and every write.
 - Seed one instance of every `check` problem: a single `check` run reports
   all of them with hints and changes no byte in the registry.
 - Remove write access from a freshly cloned registry without `.lock`: all
