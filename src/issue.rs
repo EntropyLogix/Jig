@@ -1,0 +1,704 @@
+use crate::clock;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Status {
+    Open,
+    InProgress,
+    Review,
+    Closed,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Open => "open",
+            Status::InProgress => "in_progress",
+            Status::Review => "review",
+            Status::Closed => "closed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Status> {
+        match s {
+            "open" => Some(Status::Open),
+            "in_progress" => Some(Status::InProgress),
+            "review" => Some(Status::Review),
+            "closed" => Some(Status::Closed),
+            _ => None,
+        }
+    }
+
+    pub fn active(self) -> bool {
+        self != Status::Closed
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Issue {
+    pub id: String,
+    pub title: String,
+    pub status: Status,
+    pub priority: Option<u8>,
+    pub parent: Option<String>,
+    pub depends_on: Vec<String>,
+    pub assignee: Option<String>,
+    pub defer_until: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub claim_id: Option<String>,
+    pub body: String,
+    pub history: String,
+    pub notes: String,
+    pub closing_summary: Option<String>,
+}
+
+const KEYS: [&str; 12] = [
+    "id",
+    "title",
+    "status",
+    "priority",
+    "parent",
+    "depends_on",
+    "assignee",
+    "defer_until",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "claim_id",
+];
+
+pub fn valid_label(text: &str) -> bool {
+    !text.trim().is_empty() && !text.chars().any(char::is_control)
+}
+
+pub fn valid_id(id: &str) -> bool {
+    let (stem, suffix) = match id.split_once('.') {
+        Some((s, t)) => (s, Some(t)),
+        None => (id, None),
+    };
+    let stem_ok = if let Some(hex) = stem.strip_prefix("B-") {
+        hex.len() == 6
+            && hex
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    } else if let Some(digits) = stem.strip_prefix('B') {
+        !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit())
+    } else {
+        false
+    };
+    if !stem_ok {
+        return false;
+    }
+    match suffix {
+        None => true,
+        Some(rest) => rest.split('.').all(|part| {
+            !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()) && !part.starts_with('0')
+        }),
+    }
+}
+
+pub fn id_alias(id: &str) -> Option<String> {
+    if valid_id(id) {
+        return Some(id.to_string());
+    }
+    let (stem, suffix) = match id.split_once('.') {
+        Some((s, t)) => (s, format!(".{t}")),
+        None => (id, String::new()),
+    };
+    if stem.len() == 6
+        && stem
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        let candidate = format!("B-{stem}{suffix}");
+        if valid_id(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn field_str(out: &mut String, key: &str, value: &str) {
+    out.push_str(key);
+    out.push_str(": ");
+    out.push_str(&esc(value));
+    out.push('\n');
+}
+
+fn field_opt(out: &mut String, key: &str, value: &Option<String>) {
+    match value {
+        Some(v) => field_str(out, key, v),
+        None => {
+            out.push_str(key);
+            out.push_str(": null\n");
+        }
+    }
+}
+
+pub fn encode(issue: &Issue) -> Result<String, String> {
+    validate(issue)?;
+    let mut out = String::from("---\n");
+    field_str(&mut out, "id", &issue.id);
+    field_str(&mut out, "title", &issue.title);
+    out.push_str("status: ");
+    out.push_str(issue.status.as_str());
+    out.push('\n');
+    match issue.priority {
+        Some(p) => out.push_str(&format!("priority: {p}\n")),
+        None => out.push_str("priority: null\n"),
+    }
+    field_opt(&mut out, "parent", &issue.parent);
+    if issue.depends_on.is_empty() {
+        out.push_str("depends_on: []\n");
+    } else {
+        out.push_str("depends_on: [");
+        let parts: Vec<String> = issue.depends_on.iter().map(|d| esc(d)).collect();
+        out.push_str(&parts.join(", "));
+        out.push_str("]\n");
+    }
+    field_opt(&mut out, "assignee", &issue.assignee);
+    field_opt(&mut out, "defer_until", &issue.defer_until);
+    field_opt(&mut out, "created_at", &issue.created_at);
+    field_opt(&mut out, "updated_at", &issue.updated_at);
+    field_opt(&mut out, "closed_at", &issue.closed_at);
+    field_opt(&mut out, "claim_id", &issue.claim_id);
+    out.push_str("---\n\n");
+    if let Some(summary) = &issue.closing_summary {
+        out.push_str("## Closing Summary\n\n");
+        for line in summary.split('\n') {
+            if line.is_empty() {
+                out.push_str(">\n");
+            } else {
+                out.push_str("> ");
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    if !issue.body.is_empty() {
+        out.push_str(&issue.body);
+        out.push_str("\n\n");
+    }
+    out.push_str("## History\n\n");
+    if !issue.history.is_empty() {
+        out.push_str(&issue.history);
+        out.push_str("\n\n");
+    }
+    out.push_str("## Notes\n\n");
+    if !issue.notes.is_empty() {
+        out.push_str(&issue.notes);
+        out.push_str("\n\n");
+    }
+    merge_markers(&out)?;
+    Ok(out)
+}
+
+fn validate(issue: &Issue) -> Result<(), String> {
+    if !valid_id(&issue.id) {
+        return Err(format!("invalid issue id {:?}", issue.id));
+    }
+    if !valid_label(&issue.title) {
+        return Err("title must be a non-empty single line".to_string());
+    }
+    if issue.priority.is_some_and(|p| p > 4) {
+        return Err("priority must be in 0..=4".to_string());
+    }
+    if let Some(a) = &issue.assignee
+        && !valid_label(a)
+    {
+        return Err("assignee must be a non-empty single line".to_string());
+    }
+    if issue.parent.as_deref() != issue.id.rsplit_once('.').map(|(parent, _)| parent) {
+        return Err("parent must match the dotted issue id".to_string());
+    }
+    if let Some(parent) = &issue.parent
+        && !valid_id(parent)
+    {
+        return Err(format!("invalid parent id {parent:?}"));
+    }
+    let mut seen_deps = std::collections::HashSet::new();
+    for dep in &issue.depends_on {
+        if !valid_id(dep) {
+            return Err(format!("invalid dependency id {dep:?}"));
+        }
+        if dep == &issue.id {
+            return Err("issue cannot depend on itself".to_string());
+        }
+        if !seen_deps.insert(dep) {
+            return Err(format!("duplicate dependency id {dep:?}"));
+        }
+    }
+    if let Some(d) = &issue.defer_until
+        && !clock::valid_date(d)
+    {
+        return Err(format!("invalid defer_until date {d:?}"));
+    }
+    for (key, value) in [
+        ("created_at", &issue.created_at),
+        ("updated_at", &issue.updated_at),
+        ("closed_at", &issue.closed_at),
+    ] {
+        if let Some(v) = value
+            && !clock::valid_timestamp(v)
+        {
+            return Err(format!("invalid {key} timestamp {v:?}"));
+        }
+    }
+    for (what, text) in [
+        ("body", &issue.body),
+        ("history", &issue.history),
+        ("notes", &issue.notes),
+    ] {
+        structural_check(text, what)?;
+    }
+    Ok(())
+}
+
+fn unescape(s: &str, pos: &mut usize) -> Result<String, String> {
+    let b = s.as_bytes();
+    if b.get(*pos) != Some(&b'"') {
+        return Err(format!("expected '\"' at byte {pos}"));
+    }
+    *pos += 1;
+    let mut out = String::new();
+    loop {
+        let Some(&c) = b.get(*pos) else {
+            return Err("unterminated string".to_string());
+        };
+        match c {
+            b'"' => {
+                *pos += 1;
+                return Ok(out);
+            }
+            b'\\' => {
+                *pos += 1;
+                let Some(&e) = b.get(*pos) else {
+                    return Err("unterminated escape".to_string());
+                };
+                *pos += 1;
+                match e {
+                    b'"' => out.push('"'),
+                    b'\\' => out.push('\\'),
+                    b'/' => out.push('/'),
+                    b'b' => out.push('\u{08}'),
+                    b'f' => out.push('\u{0c}'),
+                    b'n' => out.push('\n'),
+                    b'r' => out.push('\r'),
+                    b't' => out.push('\t'),
+                    b'u' => {
+                        let hi = hex4(s, pos)?;
+                        let cp = if (0xd800..0xdc00).contains(&hi) {
+                            if s.as_bytes().get(*pos) == Some(&b'\\')
+                                && s.as_bytes().get(*pos + 1) == Some(&b'u')
+                            {
+                                *pos += 2;
+                                let lo = hex4(s, pos)?;
+                                if !(0xdc00..0xe000).contains(&lo) {
+                                    return Err("invalid surrogate pair".to_string());
+                                }
+                                0x1_0000 + ((hi - 0xd800) << 10) + (lo - 0xdc00)
+                            } else {
+                                return Err("lone surrogate escape".to_string());
+                            }
+                        } else if (0xdc00..0xe000).contains(&hi) {
+                            return Err("lone surrogate escape".to_string());
+                        } else {
+                            hi
+                        };
+                        out.push(char::from_u32(cp).ok_or("invalid unicode escape")?);
+                    }
+                    _ => return Err(format!("invalid escape \\{}", e as char)),
+                }
+            }
+            0x00..=0x1f => return Err("unescaped control character".to_string()),
+            _ => {
+                let rest = &s[*pos..];
+                let ch = rest.chars().next().ok_or("unterminated string")?;
+                out.push(ch);
+                *pos += ch.len_utf8();
+            }
+        }
+    }
+}
+
+fn hex4(s: &str, pos: &mut usize) -> Result<u32, String> {
+    let b = s.as_bytes();
+    if *pos + 4 > b.len() {
+        return Err("short unicode escape".to_string());
+    }
+    let mut v: u32 = 0;
+    for &c in &b[*pos..*pos + 4] {
+        let d = (c as char).to_digit(16).ok_or("invalid unicode escape")?;
+        v = v * 16 + d;
+    }
+    *pos += 4;
+    Ok(v)
+}
+
+#[derive(Clone)]
+enum Value {
+    Null,
+    Str(String),
+    List(Vec<String>),
+}
+
+fn parse_value(raw: &str, key: &str) -> Result<Value, String> {
+    let s = raw.trim_start();
+    if s.is_empty() || s == "null" || s == "~" {
+        return Ok(Value::Null);
+    }
+    if s.starts_with('"') {
+        let mut pos = 0usize;
+        let value = unescape(s, &mut pos)?;
+        let tail = s[pos..].trim_end();
+        if !tail.is_empty() && !tail.starts_with('#') {
+            return Err(format!("trailing characters after {key} value"));
+        }
+        return Ok(Value::Str(value));
+    }
+    if let Some(inner) = s.strip_prefix('[') {
+        let inner = inner
+            .strip_suffix(']')
+            .ok_or_else(|| format!("unterminated list for {key}"))?;
+        let mut items = Vec::new();
+        if !inner.trim().is_empty() {
+            for part in inner.split(',') {
+                let p = part.trim();
+                if p.is_empty() {
+                    return Err(format!("empty element in {key} list"));
+                }
+                if p.starts_with('"') {
+                    let mut pos = 0usize;
+                    let v = unescape(p, &mut pos)?;
+                    if !p[pos..].trim().is_empty() {
+                        return Err(format!("trailing characters in {key} list element"));
+                    }
+                    items.push(v);
+                } else {
+                    items.push(p.to_string());
+                }
+            }
+        }
+        return Ok(Value::List(items));
+    }
+    let end = s.find(" #").unwrap_or(s.len());
+    let plain = s[..end].trim_end();
+    if let Some(rest) = plain.strip_prefix('#') {
+        let _ = rest;
+        return Ok(Value::Null);
+    }
+    if plain.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Str(plain.to_string()))
+}
+
+fn want_str(v: Value, key: &str) -> Result<String, String> {
+    match v {
+        Value::Str(s) => Ok(s),
+        _ => Err(format!("field {key} must be a string")),
+    }
+}
+
+fn want_opt(v: Value, key: &str) -> Result<Option<String>, String> {
+    match v {
+        Value::Null => Ok(None),
+        Value::Str(s) => Ok(Some(s)),
+        _ => Err(format!("field {key} must be a string or null")),
+    }
+}
+
+fn merge_markers(text: &str) -> Result<(), String> {
+    let mut stage = 0u8;
+    for line in text.lines() {
+        if line.starts_with("<<<<<<<") {
+            stage = 1;
+        } else if stage == 1 && line.chars().all(|c| c == '=') && line.len() >= 7 {
+            stage = 2;
+        } else if stage == 2 && line.starts_with(">>>>>>>") {
+            return Err("merge conflict markers present".to_string());
+        }
+    }
+    Ok(())
+}
+
+struct Fence {
+    marker: u8,
+    width: usize,
+}
+
+fn fence_run(line: &str) -> Option<(u8, usize, &str)> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() && b[i] == b' ' {
+        i += 1;
+    }
+    if i > 3 {
+        return None;
+    }
+    let m = *b.get(i)?;
+    if m != b'`' && m != b'~' {
+        return None;
+    }
+    let mut w = 0;
+    while b.get(i + w) == Some(&m) {
+        w += 1;
+    }
+    if w < 3 {
+        return None;
+    }
+    Some((m, w, &line[i + w..]))
+}
+
+fn fence_opens(line: &str) -> Option<Fence> {
+    let (marker, width, rest) = fence_run(line)?;
+    if marker == b'`' && rest.contains('`') {
+        return None;
+    }
+    Some(Fence { marker, width })
+}
+
+fn fence_closes(line: &str, fence: &Fence) -> bool {
+    match fence_run(line) {
+        Some((m, w, rest)) => m == fence.marker && w >= fence.width && rest.trim().is_empty(),
+        None => false,
+    }
+}
+
+fn managed(line: &str) -> Option<&'static str> {
+    match line.trim_end() {
+        "## Closing Summary" => Some("Closing Summary"),
+        "## History" => Some("History"),
+        "## Notes" => Some("Notes"),
+        _ => None,
+    }
+}
+
+fn next_line(text: &str, pos: usize) -> &str {
+    let end = text[pos.min(text.len())..]
+        .find('\n')
+        .map(|i| pos.min(text.len()) + i)
+        .unwrap_or(text.len());
+    &text[pos.min(text.len())..end]
+}
+
+fn line_end(text: &str, pos: usize) -> usize {
+    text[pos.min(text.len())..]
+        .find('\n')
+        .map(|i| pos.min(text.len()) + i + 1)
+        .unwrap_or(text.len())
+}
+
+fn scan_boundary(text: &str, from: usize, want: &str) -> Result<usize, String> {
+    let mut fence: Option<Fence> = None;
+    let mut pos = from;
+    while pos < text.len() {
+        let eol = text[pos..]
+            .find('\n')
+            .map(|i| pos + i)
+            .unwrap_or(text.len());
+        let line = &text[pos..eol];
+        match &fence {
+            Some(f) => {
+                if fence_closes(line, f) {
+                    fence = None;
+                }
+            }
+            None => {
+                if let Some(name) = managed(line) {
+                    if name == want {
+                        return Ok(pos);
+                    }
+                    return Err(format!("reserved heading ## {name} inside issue text"));
+                }
+                fence = fence_opens(line);
+            }
+        }
+        pos = eol + 1;
+    }
+    if fence.is_some() {
+        return Err("unclosed code fence".to_string());
+    }
+    Err(format!("missing ## {want} section"))
+}
+
+fn structural_check(text: &str, what: &str) -> Result<(), String> {
+    let mut fence: Option<Fence> = None;
+    let mut pos = 0usize;
+    while pos < text.len() {
+        let eol = text[pos..]
+            .find('\n')
+            .map(|i| pos + i)
+            .unwrap_or(text.len());
+        let line = &text[pos..eol];
+        match &fence {
+            Some(f) => {
+                if fence_closes(line, f) {
+                    fence = None;
+                }
+            }
+            None => {
+                if let Some(name) = managed(line) {
+                    return Err(format!("{what}: reserved heading ## {name}"));
+                }
+                fence = fence_opens(line);
+            }
+        }
+        pos = eol + 1;
+    }
+    if fence.is_some() {
+        return Err(format!("{what}: unclosed code fence"));
+    }
+    Ok(())
+}
+
+fn strip_section_gap(s: &str) -> &str {
+    s.strip_suffix("\n\n")
+        .or_else(|| s.strip_suffix('\n'))
+        .unwrap_or(s)
+}
+
+pub fn decode(markdown: &str) -> Result<Issue, String> {
+    merge_markers(markdown)?;
+    let text = markdown
+        .strip_prefix("---\n")
+        .ok_or("missing frontmatter fence")?;
+    let end = text.find("\n---\n").ok_or("missing frontmatter fence")?;
+    let fm = &text[..end];
+    let rest = &text[end + 5..];
+
+    let mut fields: Vec<(String, Value)> = Vec::new();
+    for line in fm.split('\n') {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (key, raw) = line
+            .split_once(':')
+            .ok_or_else(|| format!("malformed frontmatter line {line:?}"))?;
+        let key = key.trim();
+        if !KEYS.contains(&key) {
+            return Err(format!("unknown frontmatter key {key:?}"));
+        }
+        if fields.iter().any(|(k, _)| k == key) {
+            return Err(format!("duplicate frontmatter key {key:?}"));
+        }
+        fields.push((key.to_string(), parse_value(raw, key)?));
+    }
+    for want in KEYS {
+        if !fields.iter().any(|(k, _)| k == want) {
+            return Err(format!("missing frontmatter key {want:?}"));
+        }
+    }
+    let get = |name: &str| fields.iter().find(|(k, _)| k == name).unwrap().1.clone();
+
+    let id = want_str(get("id"), "id")?;
+    let title = want_str(get("title"), "title")?;
+    let status_raw = match get("status") {
+        Value::Str(s) => s,
+        _ => return Err("field status must be a string".to_string()),
+    };
+    let status = Status::parse(&status_raw).ok_or("invalid status value")?;
+    let priority = match get("priority") {
+        Value::Null => None,
+        Value::Str(s) => Some(
+            s.parse::<u8>()
+                .map_err(|_| format!("invalid priority {s:?}"))?,
+        ),
+        _ => return Err("invalid priority".to_string()),
+    };
+    let parent = want_opt(get("parent"), "parent")?;
+    let depends_on = match get("depends_on") {
+        Value::List(items) => items,
+        _ => return Err("field depends_on must be a list".to_string()),
+    };
+    let assignee = want_opt(get("assignee"), "assignee")?;
+    let defer_until = want_opt(get("defer_until"), "defer_until")?;
+    let created_at = want_opt(get("created_at"), "created_at")?;
+    let updated_at = want_opt(get("updated_at"), "updated_at")?;
+    let closed_at = want_opt(get("closed_at"), "closed_at")?;
+    let claim_id = want_opt(get("claim_id"), "claim_id")?;
+
+    let mut pos = usize::from(rest.starts_with('\n'));
+    let mut closing_summary = None;
+    if managed(next_line(rest, pos)) == Some("Closing Summary") {
+        pos = line_end(rest, pos);
+        if rest[pos..].starts_with('\n') {
+            pos += 1;
+        }
+        let mut parts = Vec::new();
+        loop {
+            let line = next_line(rest, pos);
+            if !line.starts_with('>') {
+                break;
+            }
+            parts.push(
+                line.strip_prefix("> ")
+                    .or_else(|| line.strip_prefix('>'))
+                    .unwrap_or(line),
+            );
+            pos = line_end(rest, pos);
+        }
+        if parts.is_empty() {
+            return Err("closing summary without blockquote".to_string());
+        }
+        closing_summary = Some(parts.join("\n"));
+        if rest[pos..].starts_with('\n') {
+            pos += 1;
+        }
+    }
+
+    let hist_at = scan_boundary(rest, pos, "History")?;
+    let body = strip_section_gap(&rest[pos..hist_at]).to_string();
+    let after_hist = line_end(rest, hist_at);
+    let notes_at = scan_boundary(rest, after_hist, "Notes")?;
+    let history_raw = &rest[after_hist..notes_at];
+    let history =
+        strip_section_gap(history_raw.strip_prefix('\n').unwrap_or(history_raw)).to_string();
+    let after_notes = line_end(rest, notes_at);
+    structural_check(&rest[after_notes..], "notes")?;
+    let notes_raw = &rest[after_notes..];
+    let notes = strip_section_gap(notes_raw.strip_prefix('\n').unwrap_or(notes_raw)).to_string();
+
+    let issue = Issue {
+        id,
+        title,
+        status,
+        priority,
+        parent,
+        depends_on,
+        assignee,
+        defer_until,
+        created_at,
+        updated_at,
+        closed_at,
+        claim_id,
+        body,
+        history,
+        notes,
+        closing_summary,
+    };
+    validate(&issue)?;
+    Ok(issue)
+}

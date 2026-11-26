@@ -1,0 +1,17 @@
+[package]
+name = "entropyjig"
+version = "0.1.0"
+description = "A file-based issue tracker and project memory for people and coding agents"
+license = "MIT"
+edition = "2024"
+rust-version = "1.89"
+
+[lib]
+name = "entropyjig"
+
+[[bin]]
+name = "jig"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { version = "=1.0.154", features = ["arbitrary_precision"] }
