@@ -2,8 +2,9 @@ use crate::clock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Status {
+    Proposed,
     Open,
-    InProgress,
+    Claimed,
     Review,
     Closed,
 }
@@ -11,8 +12,9 @@ pub enum Status {
 impl Status {
     pub fn as_str(self) -> &'static str {
         match self {
+            Status::Proposed => "proposed",
             Status::Open => "open",
-            Status::InProgress => "in_progress",
+            Status::Claimed => "claimed",
             Status::Review => "review",
             Status::Closed => "closed",
         }
@@ -20,8 +22,9 @@ impl Status {
 
     pub fn parse(s: &str) -> Option<Status> {
         match s {
+            "proposed" => Some(Status::Proposed),
             "open" => Some(Status::Open),
-            "in_progress" => Some(Status::InProgress),
+            "claimed" => Some(Status::Claimed),
             "review" => Some(Status::Review),
             "closed" => Some(Status::Closed),
             _ => None,
@@ -69,7 +72,10 @@ const KEYS: [&str; 12] = [
 ];
 
 pub fn valid_label(text: &str) -> bool {
-    !text.trim().is_empty() && !text.chars().any(char::is_control)
+    !text.trim().is_empty()
+        && !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -158,6 +164,9 @@ fn field_opt(out: &mut String, key: &str, value: &Option<String>) {
 
 pub fn encode(issue: &Issue) -> Result<String, String> {
     validate(issue)?;
+    if let Some((problem, _)) = crate::domain::field_problems(issue).first() {
+        return Err((*problem).to_string());
+    }
     let mut out = String::from("---\n");
     field_str(&mut out, "id", &issue.id);
     field_str(&mut out, "title", &issue.title);
@@ -365,54 +374,58 @@ enum Value {
 }
 
 fn parse_value(raw: &str, key: &str) -> Result<Value, String> {
-    let s = raw.trim_start();
-    if s.is_empty() || s == "null" || s == "~" {
+    let s = raw.trim_matches([' ', '\t']);
+    if s == "null" {
         return Ok(Value::Null);
     }
     if s.starts_with('"') {
+        if key == "status" || key == "priority" {
+            return Err(format!("field {key} must be a plain scalar"));
+        }
         let mut pos = 0usize;
-        let value = unescape(s, &mut pos)?;
-        let tail = s[pos..].trim_end();
-        if !tail.is_empty() && !tail.starts_with('#') {
-            return Err(format!("trailing characters after {key} value"));
+        let value = unescape(s, &mut pos).map_err(|e| format!("{key}: {e}"))?;
+        let tail = s[pos..].trim_end_matches([' ', '\t']);
+        if !tail.is_empty() {
+            return Err(format!("{key}: trailing characters after value"));
         }
         return Ok(Value::Str(value));
     }
     if let Some(inner) = s.strip_prefix('[') {
         let inner = inner
             .strip_suffix(']')
-            .ok_or_else(|| format!("unterminated list for {key}"))?;
+            .ok_or_else(|| format!("{key}: unterminated list"))?;
         let mut items = Vec::new();
-        if !inner.trim().is_empty() {
+        if !inner.trim_matches([' ', '\t']).is_empty() {
             for part in inner.split(',') {
-                let p = part.trim();
-                if p.is_empty() {
-                    return Err(format!("empty element in {key} list"));
+                let p = part.trim_matches([' ', '\t']);
+                if !p.starts_with('"') {
+                    return Err(format!("{key}: list elements must be double-quoted"));
                 }
-                if p.starts_with('"') {
-                    let mut pos = 0usize;
-                    let v = unescape(p, &mut pos)?;
-                    if !p[pos..].trim().is_empty() {
-                        return Err(format!("trailing characters in {key} list element"));
-                    }
-                    items.push(v);
-                } else {
-                    items.push(p.to_string());
+                let mut pos = 0usize;
+                let v = unescape(p, &mut pos).map_err(|e| format!("{key}: {e}"))?;
+                if !p[pos..].trim_matches([' ', '\t']).is_empty() {
+                    return Err(format!("{key}: trailing characters in list element"));
                 }
+                items.push(v);
             }
         }
         return Ok(Value::List(items));
     }
-    let end = s.find(" #").unwrap_or(s.len());
-    let plain = s[..end].trim_end();
-    if let Some(rest) = plain.strip_prefix('#') {
-        let _ = rest;
-        return Ok(Value::Null);
+    match key {
+        "status" => {
+            if Status::parse(s).is_none() {
+                return Err(format!("invalid status for field {key}: {s:?}"));
+            }
+            Ok(Value::Str(s.to_string()))
+        }
+        "priority" => match s.as_bytes() {
+            [b'0'..=b'4'] => Ok(Value::Str(s.to_string())),
+            _ => Err(format!("invalid priority for field {key}: {s:?}")),
+        },
+        _ => Err(format!(
+            "field {key} must be null or a double-quoted string"
+        )),
     }
-    if plain.is_empty() {
-        return Ok(Value::Null);
-    }
-    Ok(Value::Str(plain.to_string()))
 }
 
 fn want_str(v: Value, key: &str) -> Result<String, String> {
@@ -430,21 +443,44 @@ fn want_opt(v: Value, key: &str) -> Result<Option<String>, String> {
     }
 }
 
+fn conflict_marker(line: &str, marker: &str) -> bool {
+    line.strip_prefix(marker)
+        .is_some_and(|tail| tail.is_empty() || tail.starts_with(' '))
+}
+
 fn merge_markers(text: &str) -> Result<(), String> {
     let mut stage = 0u8;
+    let mut fence: Option<Fence> = None;
     for line in text.lines() {
-        if line.starts_with("<<<<<<<") {
-            stage = 1;
-        } else if stage == 1 && line.chars().all(|c| c == '=') && line.len() >= 7 {
-            stage = 2;
-        } else if stage == 2 && line.starts_with(">>>>>>>") {
-            return Err("merge conflict markers present".to_string());
+        match &fence {
+            Some(f) => {
+                if fence_closes(line, f) {
+                    fence = None;
+                }
+            }
+            None => {
+                if let Some(f) = fence_opens(line) {
+                    stage = 0;
+                    fence = Some(f);
+                } else if conflict_marker(line, "<<<<<<<") {
+                    stage = 1;
+                } else if line == "=======" {
+                    if stage == 1 {
+                        stage = 2;
+                    }
+                } else if conflict_marker(line, ">>>>>>>") {
+                    if stage == 2 {
+                        return Err("merge conflict markers present".to_string());
+                    }
+                    stage = 0;
+                }
+            }
         }
     }
     Ok(())
 }
 
-struct Fence {
+pub struct Fence {
     marker: u8,
     width: usize,
 }
@@ -472,7 +508,7 @@ fn fence_run(line: &str) -> Option<(u8, usize, &str)> {
     Some((m, w, &line[i + w..]))
 }
 
-fn fence_opens(line: &str) -> Option<Fence> {
+pub fn fence_opens(line: &str) -> Option<Fence> {
     let (marker, width, rest) = fence_run(line)?;
     if marker == b'`' && rest.contains('`') {
         return None;
@@ -480,7 +516,7 @@ fn fence_opens(line: &str) -> Option<Fence> {
     Some(Fence { marker, width })
 }
 
-fn fence_closes(line: &str, fence: &Fence) -> bool {
+pub fn fence_closes(line: &str, fence: &Fence) -> bool {
     match fence_run(line) {
         Some((m, w, rest)) => m == fence.marker && w >= fence.width && rest.trim().is_empty(),
         None => false,
@@ -488,10 +524,27 @@ fn fence_closes(line: &str, fence: &Fence) -> bool {
 }
 
 fn managed(line: &str) -> Option<&'static str> {
-    match line.trim_end() {
-        "## Closing Summary" => Some("Closing Summary"),
-        "## History" => Some("History"),
-        "## Notes" => Some("Notes"),
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() && b[i] == b' ' {
+        i += 1;
+    }
+    if i > 3 {
+        return None;
+    }
+    let after = line[i..].strip_prefix("##")?;
+    if !matches!(after.as_bytes().first(), Some(b' ' | b'\t')) {
+        return None;
+    }
+    let mut body = after.trim_end_matches([' ', '\t', '\r']);
+    let text_end = body.trim_end_matches('#').len();
+    if text_end < body.len() && matches!(body.as_bytes()[..text_end].last(), Some(b' ' | b'\t')) {
+        body = body[..text_end].trim_end_matches([' ', '\t']);
+    }
+    match body.trim_start_matches([' ', '\t']) {
+        "Closing Summary" => Some("Closing Summary"),
+        "History" => Some("History"),
+        "Notes" => Some("Notes"),
         _ => None,
     }
 }
@@ -544,7 +597,8 @@ fn scan_boundary(text: &str, from: usize, want: &str) -> Result<usize, String> {
     Err(format!("missing ## {want} section"))
 }
 
-fn structural_check(text: &str, what: &str) -> Result<(), String> {
+pub(crate) fn structural_check(text: &str, what: &str) -> Result<(), String> {
+    merge_markers(text).map_err(|e| format!("{what}: {e}"))?;
     let mut fence: Option<Fence> = None;
     let mut pos = 0usize;
     while pos < text.len() {
@@ -622,10 +676,10 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
     let status = Status::parse(&status_raw).ok_or("invalid status value")?;
     let priority = match get("priority") {
         Value::Null => None,
-        Value::Str(s) => Some(
-            s.parse::<u8>()
-                .map_err(|_| format!("invalid priority {s:?}"))?,
-        ),
+        Value::Str(s) => Some(match s.as_bytes() {
+            [p @ b'0'..=b'4'] => p - b'0',
+            _ => return Err(format!("invalid priority {s:?}")),
+        }),
         _ => return Err("invalid priority".to_string()),
     };
     let parent = want_opt(get("parent"), "parent")?;

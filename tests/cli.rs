@@ -7,14 +7,43 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static N: AtomicUsize = AtomicUsize::new(0);
 
-fn dir(name: &str) -> PathBuf {
-    let n = N.fetch_add(1, Ordering::SeqCst);
-    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+struct TestDir(PathBuf);
+
+impl std::ops::Deref for TestDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TestDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+fn dir(name: &str) -> TestDir {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tmp")
-        .join("tests")
-        .join(format!("{name}-{}-{n}", std::process::id()));
-    fs::create_dir_all(&p).unwrap();
-    p
+        .join("tests");
+    fs::create_dir_all(&base).unwrap();
+    loop {
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let p = base.join(format!("{name}-{}-{n}", std::process::id()));
+        match fs::create_dir(&p) {
+            Ok(()) => return TestDir(p),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("create {}: {e}", p.display()),
+        }
+    }
 }
 
 fn spawn(dir: &Path, args: &[&str]) -> std::process::Child {
@@ -68,7 +97,7 @@ fn bad(dir: &Path, args: &[&str]) -> String {
 }
 
 fn add(dir: &Path, title: &str) -> String {
-    ok(dir, &["add", title]).trim().to_string()
+    ok(dir, &["add", title, "--approved"]).trim().to_string()
 }
 
 fn fm(id: &str, status: &str, extra: &str) -> String {
@@ -96,7 +125,7 @@ fn init_and_nested_discovery() {
     assert!(gi.contains("/.lock") && gi.contains("/.move") && gi.contains(".*.tmp-"));
     assert!(
         gi.lines().any(|s| s == ".*.tmp-*"),
-        "tmp rule must be recursive, got {gi:?}"
+        "tmp rule must be unanchored to cover nested files, got {gi:?}"
     );
 
     let id = add(&proj, "work");
@@ -161,7 +190,7 @@ fn concurrent_claim_single_winner() {
         String::from_utf8_lossy(&ob.stderr)
     );
     let text = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
-    assert!(text.contains("status: in_progress"));
+    assert!(text.contains("status: claimed"));
     assert!(text.contains("claim_id: \""));
     let i = entropyjig::issue::decode(&text).unwrap();
     let who = i.assignee.clone().unwrap();
@@ -258,7 +287,9 @@ fn defer_and_force_limits() {
     assert!(e.contains("deferred"), "{e}");
 
     let p = add(&d, "parent");
-    let c = ok(&d, &["add", "child", "--parent", &p]).trim().to_string();
+    let c = ok(&d, &["add", "child", "--parent", &p, "--approved"])
+        .trim()
+        .to_string();
     ok(&d, &["defer", &p, "--until", "2999-01-01"]);
     let r = ok(&d, &["ready"]);
     assert!(!r.contains(&c), "child of deferred parent must hide: {r}");
@@ -266,8 +297,10 @@ fn defer_and_force_limits() {
     assert!(e.contains("deferred"), "{e}");
 
     let g2 = add(&d, "gp2");
-    let mid2 = ok(&d, &["add", "mid2", "--parent", &g2]).trim().to_string();
-    let leaf2 = ok(&d, &["add", "leaf2", "--parent", &mid2])
+    let mid2 = ok(&d, &["add", "mid2", "--parent", &g2, "--approved"])
+        .trim()
+        .to_string();
+    let leaf2 = ok(&d, &["add", "leaf2", "--parent", &mid2, "--approved"])
         .trim()
         .to_string();
     ok(&d, &["defer", &g2, "--until", "2999-01-01"]);
@@ -275,8 +308,22 @@ fn defer_and_force_limits() {
     assert!(!r.contains(&mid2));
     assert!(!r.contains(&leaf2), "grandchild must hide: {r}");
 
+    let dp = add(&d, "dpar");
+    let dc = ok(&d, &["add", "dchild", "--parent", &dp, "--approved"])
+        .trim()
+        .to_string();
+    ok(&d, &["defer", &dp, "--until", "2999-01-01"]);
+    assert!(!ok(&d, &["ready"]).contains(&dc));
+    ok(&d, &["close", &dp, "--reason", "cancelled"]);
+    let r = ok(&d, &["ready"]);
+    assert!(
+        r.contains(&dc),
+        "closed ancestor deferral must not hide child: {r}"
+    );
+
     ok(&d, &["close", &g, "--reason", "n/a"]);
-    let e = bad(&d, &["defer", &g, "--clear"]);
+    ok(&d, &["defer", &g, "--clear"]);
+    let e = bad(&d, &["defer", &g, "--until", "2999-01-01"]);
     assert!(e.contains("closed"), "{e}");
 
     let today = {
@@ -297,14 +344,22 @@ fn child_numbering_and_tree() {
     let d = dir("children");
     ok(&d, &["init"]);
     let p = add(&d, "parent");
-    let c1 = ok(&d, &["add", "c1", "--parent", &p]).trim().to_string();
-    let c2 = ok(&d, &["add", "c2", "--parent", &p]).trim().to_string();
+    let c1 = ok(&d, &["add", "c1", "--parent", &p, "--approved"])
+        .trim()
+        .to_string();
+    let c2 = ok(&d, &["add", "c2", "--parent", &p, "--approved"])
+        .trim()
+        .to_string();
     assert_eq!(c1, format!("{p}.1"));
     assert_eq!(c2, format!("{p}.2"));
     ok(&d, &["close", &c1, "--reason", "done"]);
-    let c3 = ok(&d, &["add", "c3", "--parent", &p]).trim().to_string();
+    let c3 = ok(&d, &["add", "c3", "--parent", &p, "--approved"])
+        .trim()
+        .to_string();
     assert_eq!(c3, format!("{p}.3"), "closed child slot must not be reused");
-    let g = ok(&d, &["add", "gc", "--parent", &c2]).trim().to_string();
+    let g = ok(&d, &["add", "gc", "--parent", &c2, "--approved"])
+        .trim()
+        .to_string();
     assert_eq!(g, format!("{c2}.1"));
     let t = ok(&d, &["tree", &p]);
     assert!(t.contains(&format!("{p} open parent")));
@@ -320,15 +375,18 @@ fn child_numbering_and_tree() {
 fn review_rounds_close_reopen() {
     let d = dir("lifecycle");
     ok(&d, &["init"]);
-    let id = ok(&d, &["add", "feat", "--body", "the description"])
-        .trim()
-        .to_string();
+    let id = ok(
+        &d,
+        &["add", "feat", "--body", "the description", "--approved"],
+    )
+    .trim()
+    .to_string();
     ok(&d, &["claim", &id, "--by", "agent"]);
     ok(&d, &["review", &id, "--summary", "round one"]);
-    ok(&d, &["request-changes", &id, "--reason", "fix tests"]);
+    ok(&d, &["rework", &id, "--reason", "fix tests"]);
     let text = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
     let i = entropyjig::issue::decode(&text).unwrap();
-    assert_eq!(i.status, entropyjig::issue::Status::InProgress);
+    assert_eq!(i.status, entropyjig::issue::Status::Claimed);
     assert_eq!(i.assignee.as_deref(), Some("agent"));
     assert!(i.claim_id.is_some());
     ok(&d, &["review", &id, "--summary", "round two"]);
@@ -475,7 +533,7 @@ fn json_wire_and_no_leaks() {
     let d = dir("json");
     ok(&d, &["init"]);
     let marker = "SECRET-BODY-žluťoučký \"quoted\" `tick`";
-    let id = ok(&d, &["add", "t \"dq\" pol", "--body", marker])
+    let id = ok(&d, &["add", "t \"dq\" pol", "--body", marker, "--approved"])
         .trim()
         .to_string();
     let r = ok(&d, &["ready"]);
@@ -531,17 +589,36 @@ fn malformed_and_duplicates_refuse() {
             .replace("status: open", "bogus: x\nstatus: open"),
     )
     .unwrap();
-    let e = bad(&d, &["list"]);
+    let o = run(&d, &["list"]);
+    assert!(o.status.success(), "list tolerates one bad file");
+    assert!(String::from_utf8_lossy(&o.stdout).contains(&id));
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        warn.contains("unknown frontmatter key") && warn.contains("jig check"),
+        "{warn}"
+    );
+    let e = bad(&d, &["show", "B-dead00"]);
     assert!(e.contains("unknown frontmatter key"), "{e}");
     fs::remove_file(d.join(".jig/open/B-dead00.md")).unwrap();
 
     let closed_copy = good.replace("status: open", "status: closed");
     fs::write(d.join(".jig/closed").join(format!("{id}.md")), &closed_copy).unwrap();
     let before = fs::read_to_string(&path).unwrap();
-    let e = bad(&d, &["list"]);
-    assert!(e.contains("duplicate"), "{e}");
-    let e = bad(&d, &["ready"]);
-    assert!(e.contains("duplicate"), "{e}");
+    let o = run(&d, &["list"]);
+    assert!(o.status.success(), "list tolerates a duplicated file");
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        warn.contains("duplicate") && warn.contains("jig check"),
+        "{warn}"
+    );
+    let o = run(&d, &["ready"]);
+    assert!(o.status.success());
+    assert!(o.stdout.is_empty());
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        warn.contains("duplicate") && warn.contains("jig check"),
+        "{warn}"
+    );
     let e = bad(&d, &["claim", &id]);
     assert!(e.contains("duplicate"), "{e}");
     assert_eq!(
@@ -556,7 +633,14 @@ fn malformed_and_duplicates_refuse() {
         "<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> other\n\n## Notes\n",
     );
     fs::write(&path, &conflicted).unwrap();
-    let e = bad(&d, &["list"]);
+    let o = run(&d, &["list"]);
+    assert!(o.status.success(), "list tolerates a conflicted file");
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        warn.contains("conflict") && warn.contains("jig check"),
+        "{warn}"
+    );
+    let e = bad(&d, &["show", &id]);
     assert!(e.contains("conflict"), "{e}");
     fs::write(&path, &good).unwrap();
     ok(&d, &["list"]);
@@ -584,7 +668,9 @@ fn codec_domain() {
     let d = dir("codec");
     ok(&d, &["init"]);
     let body = "para\n\n```\n## History\n## Notes\n```\n\n> ## Notes\n\ntail";
-    let id = ok(&d, &["add", "t", "--body", body]).trim().to_string();
+    let id = ok(&d, &["add", "t", "--body", body, "--approved"])
+        .trim()
+        .to_string();
     let text = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
     let i = entropyjig::issue::decode(&text).unwrap();
     assert_eq!(
@@ -595,8 +681,41 @@ fn codec_domain() {
     let path = d.join(format!(".jig/open/{id}.md"));
     let plain = text.replace("title: \"t\"", "title: plain #tag");
     fs::write(&path, &plain).unwrap();
-    let i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(i.title, "plain", "trailing comment stripped");
+    let e = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
+    assert!(e.contains("title"), "plain scalar must name the field: {e}");
+    for (field, value) in [
+        ("title", "'x'"),
+        ("title", "x # comment"),
+        ("title", "|"),
+        ("title", "\"a\\zb\""),
+        ("title", "\"a\" # c"),
+        ("title", "[B1]"),
+        ("parent", "B440"),
+        ("created_at", "~"),
+        ("created_at", "2020-05-04"),
+        ("claim_id", "'x'"),
+    ] {
+        let raw = text
+            .lines()
+            .find(|l| l.starts_with(&format!("{field}:")))
+            .unwrap();
+        let replaced = text.replacen(raw, &format!("{field}: {value}"), 1);
+        fs::write(&path, &replaced).unwrap();
+        let e = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
+        assert!(
+            e.contains(field),
+            "{field}: {value} must name the field, got {e}"
+        );
+        fs::write(&path, &text).unwrap();
+    }
+    let depends = text.replace("depends_on: []", "depends_on: [B1]");
+    fs::write(&path, &depends).unwrap();
+    let e = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
+    assert!(
+        e.contains("depends_on"),
+        "bare list element must name the field: {e}"
+    );
+    fs::write(&path, &text).unwrap();
 
     let escaped = text.replace("title: \"t\"", "title: \"a\\u0142b\"");
     fs::write(&path, &escaped).unwrap();
@@ -650,7 +769,7 @@ fn body_exact_preservation() {
     let d = dir("bodyexact");
     ok(&d, &["init"]);
     let body = "\n````md\n```\n## History\n```\n````\n\ntrailing\n\n";
-    let o = run_stdin(&d, &["add", "t", "--body", "-"], body);
+    let o = run_stdin(&d, &["add", "t", "--body", "-", "--approved"], body);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let id = String::from_utf8(o.stdout).unwrap().trim().to_string();
     let read = |dirn: &str| {
@@ -733,9 +852,12 @@ fn add_dep_many_preserves_order() {
     let a = add(&d, "a");
     let b = add(&d, "b");
     let c = add(&d, "c");
-    let id = ok(&d, &["add", "t", "--dep", &a, &b, "--dep", &c])
-        .trim()
-        .to_string();
+    let id = ok(
+        &d,
+        &["add", "t", "--dep", &a, &b, "--dep", &c, "--approved"],
+    )
+    .trim()
+    .to_string();
     let i = entropyjig::issue::decode(
         &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
     )
@@ -787,8 +909,13 @@ fn start_json_and_help() {
     assert!(j.starts_with("{\"workflow\":"));
     let v = run(&d, &["--version"]);
     assert!(v.status.success());
-    let h = run(&d, &["--help"]);
-    assert!(h.status.success());
+    let help = ok(&d, &["help"]);
+    for args in [&[][..], &["--help"][..], &["-h"][..]] {
+        assert_eq!(ok(&d, args), help);
+    }
+    for name in ["approve", "revise", "rework"] {
+        assert!(help.contains(name), "help missing {name}");
+    }
     let e = bad(&d, &["claim"]);
     assert!(e.contains("claim ID"), "{e}");
     let e = bad(&d, &["ready", "--bogus"]);
@@ -856,7 +983,29 @@ fn reopen_archives_summary_verbatim() {
     let d = dir("reopensum");
     ok(&d, &["init"]);
     let id = add(&d, "s");
-    let summary = "Recommended workaround:\n\n```text\ntranscript line\n";
+    let path = d.join(format!(".jig/open/{id}.md"));
+    let before = fs::read_to_string(&path).unwrap();
+    let e = bad(
+        &d,
+        &[
+            "close",
+            &id,
+            "--reason",
+            "done",
+            "--summary",
+            "Recommended workaround:\n\n```text\ntranscript line\n",
+        ],
+    );
+    assert!(
+        e.contains("--summary") && e.contains("unclosed code fence"),
+        "{e}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        before,
+        "rejected summary leaves issue bytes unchanged"
+    );
+    let summary = "Recommended workaround:\n\n```text\ntranscript line\n```";
     ok(
         &d,
         &["close", &id, "--reason", "done", "--summary", summary],
@@ -895,8 +1044,13 @@ fn dep_rm_tolerates_missing_blocker() {
         d.join("blocker-outside.md"),
     )
     .unwrap();
-    let e = bad(&d, &["ready"]);
-    assert!(e.contains(&b), "{e}");
+    let o = run(&d, &["ready"]);
+    assert!(o.status.success(), "ready must tolerate a missing blocker");
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        warn.contains(&a) && warn.contains(&b) && warn.contains("jig check"),
+        "{warn}"
+    );
     let e = bad(&d, &["claim", &a, "--force"]);
     assert!(e.contains(&b), "{e}");
     ok(&d, &["dep", "rm", &a, &b]);
@@ -1153,4 +1307,1998 @@ fn list_sort_by_creation_date() {
 
     let e = bad(&d, &["list", "--sort", "closing"]);
     assert!(e.contains("oldest or newest"), "{e}");
+}
+
+fn seed_status(d: &TestDir, id: &str, status: &str) -> PathBuf {
+    let mut text = fm(id, status, "");
+    match status {
+        "claimed" | "review" => {
+            text = text
+                .replace("assignee: null", "assignee: \"bot\"")
+                .replace("claim_id: null", "claim_id: \"c1\"");
+        }
+        "closed" => {
+            text = text.replace("closed_at: null", "closed_at: \"2026-01-01\"");
+        }
+        _ => {}
+    }
+    let place = if status == "closed" { "closed" } else { "open" };
+    for stale in ["open", "closed"] {
+        let _ = fs::remove_file(d.join(format!(".jig/{stale}/{id}.md")));
+    }
+    let p = d.join(format!(".jig/{place}/{id}.md"));
+    fs::write(&p, &text).unwrap();
+    p
+}
+
+#[test]
+fn lifecycle_transition_matrix() {
+    let d = dir("matrix");
+    ok(&d, &["init", "--no-hooks"]);
+    let statuses = ["proposed", "open", "claimed", "review", "closed"];
+    // (command argv suffix, allowed from -> to status, history suffix, dir after)
+    type Allowed = (&'static str, &'static str, &'static str);
+    let actions: &[(&[&str], &[Allowed])] = &[
+        (&["approve"], &[("proposed", "open", "approved")]),
+        (
+            &["revise", "--reason", "r"],
+            &[("open", "proposed", "revised: r")],
+        ),
+        (&["claim"], &[("open", "claimed", "")]),
+        (&["claim", "--force"], &[("open", "claimed", "")]),
+        (&["unclaim"], &[("claimed", "open", "")]),
+        (
+            &["review"],
+            &[("claimed", "review", "submitted for review by bot")],
+        ),
+        (
+            &["rework", "--reason", "r"],
+            &[("review", "claimed", "rework requested: r")],
+        ),
+        (
+            &["close", "--reason", "r"],
+            &[
+                ("proposed", "closed", "closed: r"),
+                ("open", "closed", "closed: r"),
+                ("claimed", "closed", "closed: r"),
+                ("review", "closed", "closed: r"),
+            ],
+        ),
+        (
+            &["reopen", "--reason", "r"],
+            &[("closed", "open", "reopened: r")],
+        ),
+    ];
+    for (argv, allowed) in actions {
+        for from in statuses {
+            let id = "B-a10000";
+            let path = seed_status(&d, id, from);
+            let before = fs::read_to_string(&path).unwrap();
+            let mut args: Vec<&str> = vec![argv[0], id];
+            args.extend(&argv[1..]);
+            let outcome = allowed.iter().find(|(s, _, _)| *s == from);
+            match outcome {
+                Some((_, to, hist)) => {
+                    let out = ok(&d, &args);
+                    assert!(!out.is_empty());
+                    let dir_after = if *to == "closed" { "closed" } else { "open" };
+                    let i = entropyjig::issue::decode(
+                        &fs::read_to_string(d.join(format!(".jig/{dir_after}/{id}.md"))).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(i.status.as_str(), *to, "{from} + {argv:?} must reach {to}");
+                    if hist.is_empty() {
+                        assert_eq!(i.history, "", "{from} + {argv:?} must not add history");
+                    } else {
+                        assert!(
+                            i.history.ends_with(hist),
+                            "{from} + {argv:?} history must end with {hist:?}, got {:?}",
+                            i.history
+                        );
+                    }
+                    assert_eq!(
+                        ok(&d, &["check", "--json"]).trim(),
+                        "[]",
+                        "{from} + {argv:?} -> {to} must leave a clean registry"
+                    );
+                }
+                None => {
+                    let e = bad(&d, &args);
+                    assert!(!e.is_empty());
+                    assert_eq!(
+                        fs::read_to_string(&path).unwrap(),
+                        before,
+                        "{from} + {argv:?} refusal must not change bytes"
+                    );
+                }
+            }
+        }
+    }
+    fs::write(
+        d.join(".jig/open/B-a10000.md"),
+        fm("B-a10000", "proposed", ""),
+    )
+    .unwrap();
+    let e = bad(&d, &["claim", "B-a10000"]);
+    assert!(e.contains("approval"), "{e}");
+    let e = bad(&d, &["claim", "B-a10000", "--force"]);
+    assert!(e.contains("approval"), "{e}");
+}
+
+#[test]
+fn proposals_are_not_work_and_do_not_cascade() {
+    let d = dir("proposals");
+    ok(&d, &["init", "--no-hooks"]);
+    let p = ok(&d, &["add", "p"]).trim().to_string();
+    let c = ok(&d, &["add", "c", "--parent", &p]).trim().to_string();
+    let pc = ok(&d, &["add", "pc", "--parent", &p, "--approved"])
+        .trim()
+        .to_string();
+    let read_status = |id: &str| {
+        let name = format!(".jig/open/{id}.md");
+        entropyjig::issue::decode(&fs::read_to_string(d.join(name)).unwrap())
+            .unwrap()
+            .status
+    };
+    assert_eq!(read_status(&p), entropyjig::issue::Status::Proposed);
+    assert_eq!(read_status(&c), entropyjig::issue::Status::Proposed);
+    assert_eq!(read_status(&pc), entropyjig::issue::Status::Open);
+
+    let r = ok(&d, &["ready"]);
+    let ready_ids: Vec<&str> = r
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert!(
+        ready_ids.contains(&pc.as_str())
+            && !ready_ids.contains(&p.as_str())
+            && !ready_ids.contains(&c.as_str()),
+        "{r}"
+    );
+    let e = bad(&d, &["claim", &p]);
+    assert!(e.contains("approval"), "{e}");
+    let e = bad(&d, &["claim", &p, "--force"]);
+    assert!(e.contains("approval"), "{e}");
+
+    ok(&d, &["approve", &p]);
+    assert_eq!(read_status(&p), entropyjig::issue::Status::Open);
+    assert_eq!(
+        read_status(&c),
+        entropyjig::issue::Status::Proposed,
+        "approve must not cascade to children"
+    );
+    let i = entropyjig::issue::decode(
+        &fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap(),
+    )
+    .unwrap();
+    assert!(i.history.ends_with("approved"), "{:?}", i.history);
+
+    ok(&d, &["revise", &p, "--reason", "scope unclear"]);
+    assert_eq!(read_status(&p), entropyjig::issue::Status::Proposed);
+    let i = entropyjig::issue::decode(
+        &fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap(),
+    )
+    .unwrap();
+    assert!(i.history.ends_with("revised: scope unclear"));
+
+    let w = add(&d, "w");
+    let b = ok(&d, &["add", "b"]).trim().to_string();
+    ok(&d, &["dep", "add", &w, &b]);
+    let e = bad(&d, &["claim", &w]);
+    assert!(e.contains("blocked"), "{e}");
+    ok(&d, &["claim", &w, "--force", "--by", "agent"]);
+    let i = entropyjig::issue::decode(
+        &fs::read_to_string(d.join(format!(".jig/open/{w}.md"))).unwrap(),
+    )
+    .unwrap();
+    assert!(i.history.contains(&format!("bypassing {b}")));
+}
+
+#[test]
+fn force_bypasses_every_unfinished_blocker_status() {
+    let d = dir("forceall");
+    ok(&d, &["init", "--no-hooks"]);
+    let w = add(&d, "w");
+    for (i, status) in ["proposed", "claimed", "review"].iter().enumerate() {
+        let bid = format!("B-f{i:05}");
+        let mut text = fm(&bid, status, "");
+        if *status != "proposed" {
+            text = text
+                .replace("assignee: null", "assignee: \"bot\"")
+                .replace("claim_id: null", "claim_id: \"c1\"");
+        }
+        fs::write(d.join(format!(".jig/open/{bid}.md")), text).unwrap();
+        ok(&d, &["dep", "add", &w, &bid]);
+    }
+    let e = bad(&d, &["claim", &w]);
+    assert!(e.contains("blocked"), "{e}");
+    ok(&d, &["claim", &w, "--force"]);
+    let i = entropyjig::issue::decode(
+        &fs::read_to_string(d.join(format!(".jig/open/{w}.md"))).unwrap(),
+    )
+    .unwrap();
+    for bid in ["B-f00000", "B-f00001", "B-f00002"] {
+        assert!(i.history.contains(bid), "{:?}", i.history);
+    }
+    assert_eq!(i.status, entropyjig::issue::Status::Claimed);
+}
+
+#[test]
+fn unclaim_and_status_filters() {
+    let d = dir("filters");
+    ok(&d, &["init", "--no-hooks"]);
+    let prop = ok(&d, &["add", "p"]).trim().to_string();
+    let open = add(&d, "o");
+    let claimed = add(&d, "c");
+    ok(&d, &["claim", &claimed, "--by", "bot"]);
+    let out = ok(&d, &["unclaim", &claimed]);
+    assert!(out.contains("unclaimed"));
+    ok(&d, &["claim", &claimed]);
+    let review = add(&d, "r");
+    ok(&d, &["claim", &review]);
+    ok(&d, &["review", &review]);
+    let closed = add(&d, "z");
+    ok(&d, &["close", &closed, "--reason", "done"]);
+
+    let ids_of = |args: &[&str]| -> Vec<String> {
+        let j: Value = serde_json::from_str(&ok(&d, args)).unwrap();
+        j.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        ids_of(&["list", "--status", "proposed", "--json"]),
+        vec![prop.clone()]
+    );
+    assert_eq!(
+        ids_of(&["list", "--status", "open", "--json"]),
+        vec![open.clone()]
+    );
+    assert_eq!(
+        ids_of(&["list", "--status", "claimed", "--json"]),
+        vec![claimed.clone()]
+    );
+    assert_eq!(
+        ids_of(&["list", "--status", "review", "--json"]),
+        vec![review.clone()]
+    );
+    assert_eq!(
+        ids_of(&["list", "--status", "closed", "--json"]),
+        vec![closed.clone()]
+    );
+    let all = ids_of(&["list", "--status", "all", "--json"]);
+    assert_eq!(all.len(), 5);
+    let active = ids_of(&["list", "--json"]);
+    assert!(
+        active.contains(&prop) && !active.contains(&closed),
+        "default active filter must include proposed: {active:?}"
+    );
+    let e = bad(&d, &["list", "--status", "in_progress"]);
+    assert!(e.contains("invalid status filter"), "{e}");
+    let e = bad(&d, &["unclaim", &open]);
+    assert!(e.contains("cannot unclaim"), "{e}");
+}
+
+#[test]
+fn structural_and_marker_roundtrip() {
+    let d = dir("roundtrip");
+    ok(&d, &["init", "--no-hooks"]);
+    let read_body = |id: &str| {
+        entropyjig::issue::decode(
+            &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
+        )
+        .unwrap()
+        .body
+    };
+    let accepted: &[&str] = &[
+        "conflict quoted in fence\n\n```\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch\n```\n",
+        "tilde fence\n~~~\n<<<<<<< h\n=======\n>>>>>>> j\n~~~\n",
+        "setext\n=======\n\n>>>>>>> stray end token\n",
+        "eight\n<<<<<<<<\n========\n>>>>>>>>\n",
+        "crlf\ta\r\n\r\nb\r\n",
+        "unicode “quotes” 'single' \"double\" żółć\n\nblank\n\n---\n",
+        "fenced reserved\n```\n  ## History ###\n```\n",
+        "indented code\n    ## Notes\n\n\t## Closing Summary\n",
+        "quoted reserved\n> ## Notes\n",
+        "conflict spanning fence\n<<<<<<< x\n=======\n```\ninside\n```\n>>>>>>> y\n",
+    ];
+    for (n, body) in accepted.iter().enumerate() {
+        let name = format!("ok{n}");
+        let o = run_stdin(&d, &["add", &name, "--body", "-", "--approved"], body);
+        assert!(
+            o.status.success(),
+            "case {n} rejected: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let id = String::from_utf8(o.stdout).unwrap().trim().to_string();
+        assert_eq!(&read_body(&id), body, "case {n} bytes must round-trip");
+    }
+    let rejected: &[&str] = &[
+        "real conflict\n\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch\n",
+        "indented reserved\n  ## History\n",
+        "closing hashes\n## Notes ###\n",
+        "premature end then triplet\n>>>>>>> z\n\n<<<<<<< x\n=======\n>>>>>>> y\n",
+    ];
+    let count = || fs::read_dir(d.join(".jig/open")).unwrap().count();
+    for (n, body) in rejected.iter().enumerate() {
+        let before = count();
+        let name = format!("bad{n}");
+        let o = run_stdin(&d, &["add", &name, "--body", "-"], body);
+        assert!(
+            !o.status.success(),
+            "rejected case {n} accepted: {}",
+            String::from_utf8_lossy(&o.stdout)
+        );
+        assert_eq!(count(), before, "rejected case {n} wrote a file");
+    }
+}
+
+#[test]
+fn multiline_reasons_and_summaries() {
+    let d = dir("multiline");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "m");
+
+    let reason = "first line\n\nsecond para\nthird";
+    let mut i;
+    let path = d.join(format!(".jig/open/{id}.md"));
+    let before = fs::read_to_string(&path).unwrap();
+    let e = bad(&d, &["revise", &id, "--reason", "has\ttab"]);
+    assert!(e.contains("--reason") && e.contains("control"), "{e}");
+    let e = bad(&d, &["revise", &id, "--reason", "```\nunclosed"]);
+    assert!(e.contains("--reason") && e.contains("unclosed"), "{e}");
+    let e = bad(&d, &["revise", &id, "--reason", "x\n## Notes"]);
+    assert!(e.contains("--reason") && e.contains("reserved"), "{e}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+    ok(&d, &["revise", &id, "--reason", reason]);
+    i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(i.status, entropyjig::issue::Status::Proposed);
+    let tail = i
+        .history
+        .split("\n  > ")
+        .skip(1)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(tail, reason, "multiline reason must decode verbatim");
+    ok(&d, &["approve", &id]);
+
+    ok(&d, &["claim", &id]);
+    let summary = "line one\n\n```text\nfenced\n```";
+    ok(&d, &["review", &id, "--summary", summary]);
+    i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    let part = i
+        .history
+        .split("\n  summary:\n")
+        .nth(1)
+        .expect("multiline summary block");
+    let recovered = part
+        .split('\n')
+        .map(|l| l.strip_prefix("  > ").unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(recovered, summary);
+
+    ok(&d, &["rework", &id, "--reason", "more\nlines"]);
+    i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(i.history.contains("rework requested:\n  > more\n  > lines"));
+
+    ok(
+        &d,
+        &["close", &id, "--reason", reason, "--summary", summary],
+    );
+    let closed_path = d.join(format!(".jig/closed/{id}.md"));
+    i = entropyjig::issue::decode(&fs::read_to_string(&closed_path).unwrap()).unwrap();
+    assert_eq!(i.closing_summary.as_deref(), Some(summary));
+    let part = i
+        .history
+        .split("\n- ")
+        .find(|e| e.contains("closed:"))
+        .expect("closed entry");
+    let recovered = part.split("\n  > ").skip(1).collect::<Vec<_>>().join("\n");
+    assert_eq!(recovered.trim_end(), reason);
+}
+
+#[test]
+fn option_parsing_edges() {
+    let d = dir("optedges");
+    ok(&d, &["init", "--no-hooks"]);
+    let e = bad(&d, &["--", "--help"]);
+    assert!(e.contains("unknown command"), "{e}");
+    let out = ok(&d, &["--", "list", "--json"]);
+    assert_eq!(out, "[]\n");
+    let e = bad(&d, &["--"]);
+    assert!(e.contains("missing command"), "{e}");
+    let e = bad(&d, &["--json"]);
+    assert!(e.contains("missing command"), "{e}");
+
+    for v in ["+2", " 2", "02", "5", "2x"] {
+        let e = bad(&d, &["add", "t", "-p", v, "--approved"]);
+        assert!(e.contains("priority"), "{v}: {e}");
+        let e = bad(&d, &["add", "t", "--priority", v]);
+        assert!(e.contains("priority"), "{v}: {e}");
+    }
+    for (n, v) in ["0", "1", "2", "3", "4"].iter().enumerate() {
+        let id = ok(&d, &["add", &format!("p{n}"), "-p", v, "--approved"])
+            .trim()
+            .to_string();
+        let i = entropyjig::issue::decode(
+            &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(i.priority, Some(v.parse::<u8>().unwrap()));
+    }
+    let id = add(&d, "u");
+    let e = bad(&d, &["update", &id, "-p", "9"]);
+    assert!(e.contains("priority"), "{e}");
+    let e = bad(&d, &["request-changes", &id]);
+    assert!(e.contains("unknown command"), "{e}");
+}
+
+#[test]
+fn note_rejects_separators_and_control() {
+    let d = dir("notectl");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "n");
+    let file = d.join(format!(".jig/open/{id}.md"));
+    let before = fs::read(&file).unwrap();
+    for bad_text in ["a\tb", "a\u{7f}b", "a\u{85}b", "a\u{2028}b", "a\u{2029}b"] {
+        let e = bad(&d, &["note", &id, bad_text]);
+        assert!(e.contains("single line"), "{bad_text:?}: {e}");
+    }
+    let e = bad(&d, &["note", &id, "ok", "--by", "a\u{2028}b"]);
+    assert!(e.contains("--by"), "{e}");
+    assert_eq!(
+        fs::read(&file).unwrap(),
+        before,
+        "refused notes write nothing"
+    );
+    let i = entropyjig::issue::decode(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(i.notes.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_pipe_stdout_exits_zero() {
+    use std::os::unix::io::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    let d = dir("bpipe");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "s");
+    let (a, b) = UnixStream::pair().unwrap();
+    drop(b);
+    let fd: OwnedFd = a.into();
+    let o = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["show", &id, "--json"])
+        .current_dir(&d)
+        .env("XDG_STATE_HOME", d.join("xdg"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(fd))
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert!(o.stderr.is_empty(), "stderr must be silent on EPIPE");
+}
+
+fn tree_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &Path, rel: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        let mut ents: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
+        ents.sort_by_key(|e| e.file_name());
+        for e in ents {
+            let p = rel.join(e.file_name());
+            let ft = e.file_type().unwrap();
+            if ft.is_dir() {
+                walk(&e.path(), &p, out);
+            } else if ft.is_file() {
+                out.push((p.to_string_lossy().to_string(), fs::read(e.path()).unwrap()));
+            } else {
+                out.push((p.to_string_lossy().to_string(), b"LINK".to_vec()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, Path::new(""), &mut out);
+    out
+}
+
+fn seed_bare_registry(d: &Path) -> PathBuf {
+    let jig = d.join(".jig");
+    fs::create_dir_all(jig.join("open")).unwrap();
+    fs::create_dir_all(jig.join("closed")).unwrap();
+    fs::write(jig.join("memory.md"), "# Project Memory\n").unwrap();
+    fs::write(jig.join(".gitignore"), "/.lock\n/.move\n.*.tmp-*\n").unwrap();
+    jig
+}
+
+#[test]
+fn check_reports_every_problem_without_changes() {
+    let d = dir("checkall");
+    let jig = seed_bare_registry(&d);
+    fs::write(jig.join("memory.md"), "junk\n").unwrap();
+    fs::write(jig.join(".gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap();
+
+    fs::write(jig.join("open/B-00a001.md"), b"\xff\xfe garbage").unwrap();
+    fs::write(jig.join("open/B-00a002.md"), "not an issue file").unwrap();
+    fs::write(jig.join("open/B-00a003.md"), fm("B-00b003", "open", "")).unwrap();
+    fs::write(jig.join("open/B-00a004.md"), fm("B-00a004", "closed", "")).unwrap();
+    fs::write(jig.join("open/B-00a005.md"), fm("B-00a005", "open", "")).unwrap();
+    fs::write(jig.join("closed/B-00a005.md"), fm("B-00a005", "closed", "")).unwrap();
+    let conflicted = fm("B-00a006", "open", "").replace(
+        "## Notes\n",
+        "<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> z\n\n## Notes\n",
+    );
+    fs::write(jig.join("open/B-00a006.md"), conflicted).unwrap();
+    let refs = fm("B-f00d00.1", "open", "")
+        .replace("parent: null", "parent: \"B-f00d00\"")
+        .replace("depends_on: []", "depends_on: [\"B-dead00\"]");
+    fs::write(jig.join("open/B-f00d00.1.md"), refs).unwrap();
+    for (id, dep) in [
+        ("B-c00001", "B-c00002"),
+        ("B-c00002", "B-c00003"),
+        ("B-c00003", "B-c00001"),
+    ] {
+        let text =
+            fm(id, "open", "").replace("depends_on: []", &format!("depends_on: [\"{dep}\"]"));
+        let text = if id == "B-c00002" {
+            text.replace("assignee: null", "assignee: \"x\"")
+        } else {
+            text
+        };
+        fs::write(jig.join(format!("open/{id}.md")), text).unwrap();
+    }
+    let fields = fm("B-f1ed01", "open", "")
+        .replace("assignee: null", "assignee: \"x\"")
+        .replace("claim_id: null", "claim_id: \"c\"")
+        .replace("closed_at: null", "closed_at: \"2026-01-01\"")
+        .replace("depends_on: []", "depends_on: [\"B-f00d0a\"]")
+        .replace("## History\n", "## Closing Summary\n\n> s\n\n## History\n");
+    fs::write(jig.join("open/B-f1ed01.md"), fields).unwrap();
+    fs::write(jig.join("open/notes.txt"), "hello").unwrap();
+    fs::write(jig.join("open/.B-0000aa.md.tmp-42-1"), "x").unwrap();
+    fs::create_dir(jig.join("open/B-d1r001.md")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("B-00a004.md", jig.join("closed/B-5ymb01.md")).unwrap();
+    fs::write(
+        jig.join(".move"),
+        journal(&fm("B-0ff001", "open", ""), &fm("B-0ff001", "closed", "")),
+    )
+    .unwrap();
+
+    let before = tree_bytes(&jig);
+    let o = run(&d, &["check", "--json"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stdout = String::from_utf8(o.stdout).unwrap();
+    let problems: Vec<Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(problems.len() >= 16, "{stdout}");
+    let abs = d.to_string_lossy().to_string();
+    assert!(
+        !stdout.contains(&abs),
+        "absolute path leaked into diagnostics: {stdout}"
+    );
+    for p in &problems {
+        let path = p["path"].as_str().unwrap();
+        let problem = p["problem"].as_str().unwrap();
+        let hint = p["hint"].as_str().unwrap();
+        assert!(path.starts_with(".jig/"), "bad path {path:?} in {stdout}");
+        assert!(!PathBuf::from(path).is_absolute(), "absolute {path:?}");
+        assert!(
+            !problem.contains(&abs),
+            "absolute path in problem: {problem}"
+        );
+        assert!(
+            !problem.contains(path),
+            "problem repeats its own path: {problem}"
+        );
+        assert!(!hint.contains(&abs), "absolute path in hint: {hint}");
+        assert!(!problem.is_empty());
+        assert!(!hint.is_empty(), "empty hint for {path}");
+    }
+    let has = |path: &str, needle: &str| {
+        problems.iter().any(|p| {
+            p["path"].as_str() == Some(path)
+                && p["problem"].as_str().unwrap().contains(needle)
+                && !p["hint"].as_str().unwrap().is_empty()
+        })
+    };
+    assert!(has(".jig/open/B-00a001.md", "read"), "{stdout}");
+    assert!(has(".jig/open/B-00a002.md", "frontmatter"), "{stdout}");
+    assert!(has(".jig/open/B-00a003.md", "file name"), "{stdout}");
+    assert!(has(".jig/open/B-00a004.md", "closed"), "{stdout}");
+    assert!(has(".jig/open/B-00a005.md", "duplicate"), "{stdout}");
+    assert!(has(".jig/closed/B-00a005.md", "duplicate"), "{stdout}");
+    assert!(has(".jig/open/B-00a006.md", "conflict"), "{stdout}");
+    assert!(
+        has(".jig/open/B-f00d00.1.md", "parent B-f00d00"),
+        "{stdout}"
+    );
+    assert!(
+        has(".jig/open/B-f00d00.1.md", "blocker B-dead00"),
+        "{stdout}"
+    );
+    assert!(has(".jig/open/B-c00001.md", "cycle"), "{stdout}");
+    assert!(has(".jig/open/B-c00002.md", "assignee"), "{stdout}");
+    assert!(has(".jig/open/B-f1ed01.md", "blocker B-f00d0a"), "{stdout}");
+    assert!(
+        problems
+            .iter()
+            .filter(|p| p["path"].as_str() == Some(".jig/open/B-f1ed01.md"))
+            .count()
+            >= 4,
+        "field inconsistencies: {stdout}"
+    );
+    assert!(has(".jig/open/notes.txt", "unexpected"), "{stdout}");
+    assert!(has(".jig/open/B-d1r001.md", "regular file"), "{stdout}");
+    #[cfg(unix)]
+    assert!(has(".jig/closed/B-5ymb01.md", "symbolic link"), "{stdout}");
+    assert!(
+        has(".jig/open/.B-0000aa.md.tmp-42-1", "temporary"),
+        "{stdout}"
+    );
+    assert!(has(".jig/memory.md", "memory.md"), "{stdout}");
+    assert!(has(".jig/.gitignore", "legacy"), "{stdout}");
+    assert!(has(".jig/.move", ""), "{stdout}");
+    assert_eq!(tree_bytes(&jig), before, "check must not change .jig");
+    assert!(!jig.join(".lock").exists(), "check must not create .lock");
+}
+
+#[test]
+fn tmp_ignore_rule_covers_nested_files() {
+    let d = dir("tmpignore");
+    let jig = seed_bare_registry(&d);
+    let init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&d)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init must succeed for this test");
+    fs::write(jig.join("open/.B-0000aa.md.tmp-42-1"), "x").unwrap();
+    let tmp = ".jig/open/.B-0000aa.md.tmp-42-1";
+    let ignored = || {
+        Command::new("git")
+            .args(["check-ignore", "--no-index", tmp])
+            .current_dir(&d)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    assert!(
+        ignored(),
+        "unanchored `.*.tmp-*` must ignore nested tmp files"
+    );
+    fs::write(jig.join(".gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap();
+    assert!(
+        !ignored(),
+        "legacy anchored `/.*.tmp-*` must not ignore nested tmp files"
+    );
+}
+
+#[test]
+fn check_pending_move_then_read_recovers() {
+    let d = dir("checkmove");
+    let jig = seed_bare_registry(&d);
+    let old = fm("B-0ff002", "open", "");
+    let new = fm("B-0ff002", "closed", "");
+    fs::write(jig.join("open/B-0ff002.md"), &old).unwrap();
+    fs::write(jig.join(".move"), journal(&old, &new)).unwrap();
+
+    let o = run(&d, &["check", "--json"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stdout = String::from_utf8(o.stdout).unwrap();
+    assert!(
+        stdout.contains("pending move journal for B-0ff002"),
+        "{stdout}"
+    );
+    assert!(jig.join(".move").exists(), "check must not recover");
+    assert!(!jig.join(".lock").exists());
+
+    fs::write(jig.join(".lock"), "").unwrap();
+    let out = ok(&d, &["show", "B-0ff002"]);
+    assert!(out.contains("closed"), "{out}");
+    assert!(!jig.join(".move").exists(), "read must finish the move");
+    assert!(jig.join("closed/B-0ff002.md").is_file());
+    assert!(!jig.join("open/B-0ff002.md").exists());
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn ready_warns_once_per_broken_reference() {
+    let d = dir("readywarn");
+    ok(&d, &["init", "--no-hooks"]);
+    let good = add(&d, "good work");
+    fs::write(
+        d.join(".jig/open/B-de0001.md"),
+        fm("B-de0001", "open", "").replace("depends_on: []", "depends_on: [\"B-dead00\"]"),
+    )
+    .unwrap();
+    fs::write(
+        d.join(".jig/open/B-bad0f0.md"),
+        fm("B-bad0f0", "open", "").replace("claim_id: null", "claim_id: \"c\""),
+    )
+    .unwrap();
+    fs::write(
+        d.join(".jig/open/B-de0002.md"),
+        fm("B-de0002", "open", "").replace("depends_on: []", "depends_on: [\"B-bad0f0\"]"),
+    )
+    .unwrap();
+    fs::write(
+        d.join(".jig/open/B-ca0000.1.md"),
+        fm("B-ca0000.1", "open", "").replace("parent: null", "parent: \"B-ca0000\""),
+    )
+    .unwrap();
+
+    let o = run(&d, &["ready", "--json"]);
+    assert!(o.status.success());
+    let rows: Vec<Value> = serde_json::from_str(&String::from_utf8(o.stdout).unwrap()).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"].as_str().unwrap(), good);
+    let warn = String::from_utf8_lossy(&o.stderr);
+    let refs: Vec<_> = warn.lines().filter(|l| l.contains("unresolved")).collect();
+    assert_eq!(refs.len(), 3, "{warn}");
+    assert!(
+        warn.lines().filter(|l| l.contains("B-bad0f0.md")).count() == 1,
+        "one file warning for the malformed record: {warn}"
+    );
+    assert!(
+        warn.contains("B-de0002") && warn.contains("B-de0001") && warn.contains("B-ca0000.1"),
+        "{warn}"
+    );
+    let e = bad(&d, &["claim", "B-de0002", "--force"]);
+    assert!(
+        e.contains("B-bad0f0"),
+        "no force bypass of unusable refs: {e}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn read_only_registry_reads_without_lock() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    let d = dir("readonly");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "ro work");
+    ok(&d, &["remember", "topic", "value"]);
+    fs::remove_file(d.join(".jig/.lock")).unwrap();
+    let xdg = d.join("xdg");
+    fs::create_dir_all(&xdg).unwrap();
+    fs::set_permissions(&xdg, fs::Permissions::from_mode(0o777)).unwrap();
+
+    let locked: Vec<PathBuf> =
+        [d.join(".jig"), d.join(".jig/open"), d.join(".jig/closed")].to_vec();
+    struct Restore(Vec<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            for p in &self.0 {
+                let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+    for p in &locked {
+        fs::set_permissions(p, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let restore = Restore(locked.clone());
+
+    for args in [
+        vec!["start"],
+        vec!["ready"],
+        vec!["show", &id],
+        vec!["list"],
+        vec!["tree", &id],
+        vec!["recall"],
+        vec!["check"],
+    ] {
+        let o = run(&d, &args);
+        assert!(
+            o.status.success(),
+            "{args:?} failed on read-only registry: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+    assert!(
+        !d.join(".jig/.lock").exists(),
+        "read commands must not create .lock"
+    );
+
+    let probe = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(d.join(".jig/.probe"));
+    let as_root = probe.is_ok();
+    if as_root {
+        fs::remove_file(d.join(".jig/.probe")).unwrap();
+    }
+    let jig_cmd = |args: &[&str]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_jig"));
+        cmd.args(args)
+            .current_dir(&d)
+            .env("XDG_STATE_HOME", &xdg)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if as_root {
+            cmd.uid(65534).gid(65534);
+        }
+        cmd.output().unwrap()
+    };
+    let o = jig_cmd(&["add", "must fail"]);
+    assert!(
+        !o.status.success(),
+        "write succeeded in a read-only registry"
+    );
+    assert!(!o.stderr.is_empty());
+    assert_eq!(fs::read_dir(d.join(".jig/open")).unwrap().count(), 1);
+    drop(restore);
+
+    let old = fm("B-0ff003", "open", "");
+    let new = fm("B-0ff003", "closed", "");
+    fs::write(d.join(".jig/open/B-0ff003.md"), &old).unwrap();
+    fs::write(d.join(".jig/.move"), journal(&old, &new)).unwrap();
+    fs::File::create(d.join(".jig/.lock")).unwrap();
+    let _relock = Restore(locked.clone());
+    for p in &locked {
+        fs::set_permissions(p, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let o = jig_cmd(&["show", "B-0ff003"]);
+    assert!(
+        !o.status.success(),
+        "read must not silently recover in a read-only registry"
+    );
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(e.contains("jig check") || e.contains(".move"), "{e}");
+    assert!(d.join(".jig/.move").exists(), "journal must remain");
+    assert!(d.join(".jig/open/B-0ff003.md").exists());
+}
+
+#[test]
+fn init_repairs_missing_components() {
+    let d = dir("initfix");
+    ok(&d, &["init", "--no-hooks"]);
+    fs::remove_dir_all(d.join(".jig/closed")).unwrap();
+    fs::remove_file(d.join(".jig/memory.md")).unwrap();
+    fs::write(d.join(".jig/.gitignore"), "custom-only\n").unwrap();
+    assert_eq!(ok(&d, &["init", "--no-hooks"]), "initialized .jig/\n");
+    assert!(d.join(".jig/closed").is_dir());
+    assert_eq!(
+        fs::read_to_string(d.join(".jig/memory.md")).unwrap(),
+        "# Project Memory\n",
+        "repair writes fresh memory.md"
+    );
+    assert_eq!(
+        fs::read_to_string(d.join(".jig/.gitignore")).unwrap(),
+        "custom-only\n",
+        "existing .gitignore bytes preserved"
+    );
+    fs::write(
+        d.join(".jig/memory.md"),
+        "# Project Memory\n\n## kept\n> v\n",
+    )
+    .unwrap();
+    assert_eq!(
+        ok(&d, &["init", "--no-hooks"]),
+        ".jig/ already initialized\n"
+    );
+    assert_eq!(
+        fs::read_to_string(d.join(".jig/memory.md")).unwrap(),
+        "# Project Memory\n\n## kept\n> v\n"
+    );
+    let _id = add(&d, "post repair");
+
+    #[cfg(unix)]
+    {
+        fs::remove_dir_all(d.join(".jig/open")).unwrap();
+        std::os::unix::fs::symlink("closed", d.join(".jig/open")).unwrap();
+        let e = bad(&d, &["init", "--no-hooks"]);
+        assert!(e.contains("open"), "{e}");
+        fs::remove_file(d.join(".jig/open")).unwrap();
+        fs::create_dir(d.join(".jig/open")).unwrap();
+    }
+
+    let outer = dir("initouter");
+    ok(&outer, &["init", "--no-hooks"]);
+    let inner = outer.join("inner");
+    fs::create_dir_all(inner.join(".jig/open")).unwrap();
+    let e = bad(&inner, &["list"]);
+    assert!(
+        e.contains("jig init"),
+        "partial registry must point at init, not the ancestor: {e}"
+    );
+    assert_eq!(ok(&inner, &["init", "--no-hooks"]), "initialized .jig/\n");
+    assert!(inner.join(".jig/closed").is_dir());
+    assert!(inner.join(".jig/memory.md").is_file());
+    assert_eq!(ok(&inner, &["list", "--json"]).trim(), "[]");
+}
+
+fn assert_splice(orig: &str, result: &str) {
+    let ob = orig.as_bytes();
+    let rb = result.as_bytes();
+    let pre = (0..ob.len().min(rb.len()))
+        .find(|&i| ob[i] != rb[i])
+        .unwrap_or(ob.len());
+    let mut suf = 0usize;
+    while suf < (ob.len() - pre).min(rb.len() - pre)
+        && ob[ob.len() - 1 - suf] == rb[rb.len() - 1 - suf]
+    {
+        suf += 1;
+    }
+    assert_eq!(&result[..pre], &orig[..pre], "prefix changed");
+    assert_eq!(
+        &result[result.len() - suf..],
+        &orig[orig.len() - suf..],
+        "suffix changed"
+    );
+    let inserted = &result[pre..result.len() - suf];
+    let v: Value = serde_json::from_str(result).unwrap();
+    let groups = v["hooks"]["SessionStart"].as_array().unwrap();
+    let standard =
+        json!({"hooks":[{"command":"jig start --hook-json","timeout":5,"type":"command"}]});
+    assert_eq!(
+        groups.last().unwrap(),
+        &standard,
+        "inserted fragment {inserted:?} lacks the hook group"
+    );
+}
+
+#[test]
+fn init_config_splice_matrix() {
+    let cases: &[&str] = &[
+        "",
+        "   \n\n",
+        "{}",
+        "{\"model\": \"opus\"}",
+        "{\"hooks\":{}}",
+        "{\n  \"hooks\": {\n    \"SessionStart\": []\n  }\n}\n",
+        "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"old\"}]}],\"Stop\":[{\"hooks\":[]}]},\"other\":{\"esc\":\"a\\\"b\",\"deep\":[[1,2],{\"k\":null}]}}",
+        "{\r\n  \"hooks\": {\r\n    \"SessionStart\": []\r\n  }\r\n}\r\n",
+    ];
+    for (n, orig) in cases.iter().enumerate() {
+        let d = dir(&format!("splice{n}"));
+        let claude = d.join(".claude/settings.json");
+        fs::create_dir_all(d.join(".claude")).unwrap();
+        fs::write(&claude, orig).unwrap();
+        ok(&d, &["init"]);
+        let result = fs::read_to_string(&claude).unwrap();
+        assert_splice(orig, &result);
+        ok(&d, &["init"]);
+        assert_eq!(
+            fs::read_to_string(&claude).unwrap(),
+            result,
+            "case {n} not idempotent"
+        );
+    }
+
+    let refusals: &[(&str, &str)] = &[
+        ("{\"hooks\":{},\"hooks\":{}}", "duplicate key \"hooks\""),
+        (
+            "{\"hooks\":{\"SessionStart\":[],\"SessionStart\":[]}}",
+            "duplicate key \"SessionStart\"",
+        ),
+        (
+            "{\"hooks\":{\"\\u0053essionStart\":[],\"SessionStart\":[]}}",
+            "duplicate key \"SessionStart\"",
+        ),
+        (
+            "{\"hooks\":{\"SessionStart\":\"nope\"}}",
+            "SessionStart to be an array",
+        ),
+        (
+            "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":9}]}]}}",
+            "differs or is duplicated",
+        ),
+        ("{bad json", "invalid JSON"),
+    ];
+    for (n, (orig, needle)) in refusals.iter().enumerate() {
+        let d = dir(&format!("refuse{n}"));
+        let claude = d.join(".claude/settings.json");
+        fs::create_dir_all(d.join(".claude")).unwrap();
+        fs::write(&claude, orig).unwrap();
+        let e = bad(&d, &["init"]);
+        assert!(e.contains(needle), "case {n}: {e}");
+        assert_eq!(fs::read_to_string(&claude).unwrap(), *orig);
+    }
+}
+
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0
+    }
+    fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+        &xs[(self.next() >> 33) as usize % xs.len()]
+    }
+}
+
+#[test]
+fn seeded_body_variations_roundtrip_or_refuse() {
+    let d = dir("seededbody");
+    ok(&d, &["init", "--no-hooks"]);
+    let mut rng = Rng(0x9e3779b97f4a7c15);
+    const SAFE: &[&str] = &[
+        "plain text line",
+        "zażółć gęślą jaźń — 🎲 ünïcode",
+        "\"quoted\" 'apostrophe' `tick`",
+        "",
+        "---",
+        "### deeper heading",
+        "# one hash",
+        "  indented  ",
+        "<<<<<<< HEAD\nno equals\n>>>>>>> other",
+        "=======",
+        ">>>>>>> branch",
+        "|\ttabs",
+        "text with ## midline",
+        "* bullet",
+    ];
+    const POISON: &[&str] = &[
+        "## History",
+        "## Notes",
+        "## Closing Summary",
+        "   ## History",
+        "## Notes ###",
+        "<<<<<<< A\nx\n=======\ny\n>>>>>>> B",
+        "```\nunclosed",
+    ];
+    const FENCED: &[&str] = &[
+        "## History",
+        "## Notes x",
+        "## Closing Summary",
+        "<<<<<<< A\nx\n=======\ny\n>>>>>>> B",
+        "   ## Notes ###",
+    ];
+    for case in 0..24 {
+        let id = add(&d, &format!("s{case}"));
+        let file = d.join(format!(".jig/open/{id}.md"));
+        let orig = fs::read_to_string(&file).unwrap();
+        let mut body = String::from("seed intro\n\n");
+        let mut accept = true;
+        for _ in 0..1 + (rng.next() % 4) {
+            match rng.next() % 8 {
+                0..=4 => {
+                    body.push_str(rng.pick(SAFE));
+                    body.push('\n');
+                }
+                5 => {
+                    body.push_str("```\n");
+                    body.push_str(rng.pick(FENCED));
+                    body.push_str("\n```\n");
+                }
+                6 => {
+                    body.push_str("~~~~\n");
+                    body.push_str(rng.pick(FENCED));
+                    body.push_str("\n~~~~\n");
+                }
+                _ => {
+                    accept = false;
+                    body.push_str(rng.pick(POISON));
+                    body.push('\n');
+                }
+            }
+        }
+        if case % 3 == 0 && accept {
+            accept = false;
+            body.push_str(rng.pick(POISON));
+            body.push('\n');
+        }
+        let before = fs::read_to_string(&file).unwrap();
+        assert_eq!(before, orig);
+        if accept {
+            ok(&d, &["update", &id, "--body", &body]);
+            let i = entropyjig::issue::decode(&fs::read_to_string(&file).unwrap()).unwrap();
+            assert_eq!(i.body, body, "case {case} body must round-trip exactly");
+        } else {
+            let e = bad(&d, &["update", &id, "--body", &body]);
+            assert!(!e.is_empty());
+            assert_eq!(
+                fs::read_to_string(&file).unwrap(),
+                before,
+                "case {case} refused body must not write"
+            );
+        }
+    }
+}
+
+#[test]
+fn memory_remember_roundtrips_difficult_values() {
+    let d = dir("memvals");
+    ok(&d, &["init", "--no-hooks"]);
+    let values = [
+        "Unicode zażółć 🎲 é",
+        "line1\r\nline2\nline3",
+        "```\nfenced ## History\n```",
+        "## Notes\nlooks like a heading",
+        "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> x",
+        "",
+        "trailing newline\n",
+    ];
+    for (n, value) in values.iter().enumerate() {
+        let topic = format!("t{n}");
+        ok(&d, &["remember", &topic, value]);
+        let out = ok(&d, &["recall", &topic, "--json"]);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["value"].as_str().unwrap(),
+            *value,
+            "memory value must round-trip exactly"
+        );
+    }
+    ok(&d, &["remember", "flagged", "--", "-x"]);
+    let out = ok(&d, &["recall", "flagged", "--json"]);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["value"].as_str().unwrap(), "-x");
+}
+
+#[test]
+fn reopen_multiline_reason_and_defer_today() {
+    let d = dir("reopenml");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "ml");
+    ok(&d, &["close", &id, "--reason", "closed\nfor cleanup"]);
+    ok(&d, &["reopen", &id, "--reason", "first line\nsecond line"]);
+    let i = entropyjig::issue::decode(
+        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        i.history
+            .ends_with("reopened:\n  > first line\n  > second line"),
+        "{:?}",
+        i.history
+    );
+
+    let today = entropyjig::clock::today();
+    let id2 = add(&d, "defer me");
+    ok(&d, &["defer", &id2, "--until", &today]);
+    let out = ok(&d, &["ready"]);
+    assert!(
+        out.contains(&id2),
+        "defer-until-today must not defer: {out}"
+    );
+}
+
+const G_STRUCT: u8 = 1;
+const G_NL: u8 = 2;
+const G_CTRL: u8 = 4;
+const G_SEP: u8 = 8;
+const G_BLANK: u8 = 16;
+const G_EMPTY: u8 = 32;
+const G_LONG: u8 = 64;
+
+const GEN_TOKENS: &[&str] = &[
+    "plain token",
+    "zażółć 🎲 ünïcode — dash",
+    "\"quoted\" 'apos' `tick`",
+];
+
+fn generated_text(rng: &mut Rng, case: usize) -> String {
+    let token = rng.pick(GEN_TOKENS);
+    match case % 19 {
+        0 => format!("word {token} {case}"),
+        1 => String::new(),
+        2 => "   ".to_string(),
+        3 => format!("zażółć 🎲 {token} \"quoted\" 'apos' `tick`"),
+        4 => "---".to_string(),
+        5 => format!("{token}\nsecond line {case}\ntrailing\n"),
+        6 => format!("```\n## History\n<<<<<<< A\n{token}\n=======\ny\n>>>>>>> B\n```\nok {case}"),
+        7 => "   ## History ###".to_string(),
+        8 => "## Notes".to_string(),
+        9 => format!("<<<<<<< A\n{token}\n=======\ny\n>>>>>>> B"),
+        10 => format!("```\nunclosed {token}"),
+        11 => format!("a\r\n{token}\r\n"),
+        12 => format!("tab\t{token}"),
+        13 => format!("esc\u{1b}{token}"),
+        14 => format!("nel\u{85}{token}"),
+        15 => format!("sep\u{2028}{token}\u{2029}y"),
+        16 => format!("```rust\n{token}\n```"),
+        17 => format!("~~~~\n{token}\n~~~~"),
+        _ => format!("{token}{}", "x".repeat(600)),
+    }
+}
+
+fn generated_tag(case: usize) -> u8 {
+    match case % 19 {
+        1 => G_BLANK | G_EMPTY,
+        2 => G_BLANK,
+        5 | 6 | 16 | 17 => G_NL,
+        7 | 8 => G_STRUCT,
+        9 | 10 => G_STRUCT | G_NL,
+        11 => G_CTRL | G_NL,
+        12..=14 => G_CTRL,
+        15 => G_SEP,
+        18 => G_LONG,
+        _ => 0,
+    }
+}
+
+fn ok_title(t: u8) -> bool {
+    t & (G_NL | G_CTRL | G_SEP | G_BLANK) == 0
+}
+fn ok_body(t: u8) -> bool {
+    t & G_STRUCT == 0
+}
+fn ok_reason(t: u8) -> bool {
+    t & (G_STRUCT | G_CTRL | G_BLANK) == 0
+}
+fn ok_summary(t: u8) -> bool {
+    t & (G_STRUCT | G_CTRL) == 0
+}
+fn ok_note(t: u8) -> bool {
+    t & (G_NL | G_CTRL | G_SEP | G_EMPTY | G_LONG) == 0
+}
+
+fn show_value(d: &Path, id: &str) -> Value {
+    serde_json::from_str(&ok(d, &["show", id, "--json"])).unwrap()
+}
+
+fn hist_last_value(history: &str, label: &str) -> Option<String> {
+    for part in history.split("\n- ").collect::<Vec<_>>().into_iter().rev() {
+        let entry = part.strip_prefix("- ").unwrap_or(part);
+        let lines: Vec<&str> = entry.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let content = if i == 0 {
+                line.splitn(4, ' ').nth(3).unwrap_or("")
+            } else {
+                line.strip_prefix("  ").unwrap_or(line)
+            };
+            if let Some(tail) = content.strip_prefix(&format!("{label} ")) {
+                return Some(tail.to_string());
+            }
+            if content == label {
+                let mut v = Vec::new();
+                for l in &lines[i + 1..] {
+                    match l.strip_prefix("  > ") {
+                        Some(x) => v.push(x),
+                        None => break,
+                    }
+                }
+                return Some(v.join("\n"));
+            }
+        }
+    }
+    None
+}
+
+fn generated_case(d: &Path, args: &[&str], accept: bool, case: usize) -> Output {
+    let before = tree_bytes(&d.join(".jig"));
+    let o = run(d, args);
+    if accept {
+        assert!(
+            o.status.success(),
+            "case {case} {args:?} must succeed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    } else {
+        assert!(!o.status.success(), "case {case} {args:?} must fail");
+        assert_eq!(
+            tree_bytes(&d.join(".jig")),
+            before,
+            "case {case} refused write changed .jig"
+        );
+    }
+    o
+}
+
+#[test]
+fn generated_add_title_cases() {
+    let d = dir("genadd");
+    ok(&d, &["init", "--no-hooks"]);
+    assert!(!d.join("xdg").exists(), "init must not create state home");
+    let e = bad(&d, &["add", "--approved", "--", "   "]);
+    assert!(e.contains("single line"), "{e}");
+    assert!(
+        !d.join("xdg").exists(),
+        "rejected title must not install salt"
+    );
+    let jig = d.join(".jig");
+    let mut rng = Rng(0x8f3a1);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_title(generated_tag(case));
+        let o = generated_case(
+            &d,
+            &["add", "--approved", "--", text.as_str()],
+            accept,
+            case,
+        );
+        if accept {
+            ok_n += 1;
+            let id = String::from_utf8(o.stdout).unwrap().trim().to_string();
+            let i = show_value(&d, &id);
+            assert_eq!(i["title"].as_str().unwrap(), text, "case {case} title");
+            fs::remove_file(jig.join("open").join(format!("{id}.md"))).unwrap();
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "add title ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_update_title_cases() {
+    let d = dir("genutitle");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    let mut rng = Rng(0x8f3a2);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_title(generated_tag(case));
+        generated_case(&d, &["update", &id, "--title", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            assert_eq!(i["title"].as_str().unwrap(), text, "case {case} title");
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "update title ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_update_body_cases() {
+    let d = dir("genubody");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    let mut rng = Rng(0x8f3a3);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_body(generated_tag(case));
+        generated_case(&d, &["update", &id, "--body", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            assert_eq!(i["body"].as_str().unwrap(), text, "case {case} body");
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "update body ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_review_summary_cases() {
+    let d = dir("genreviews");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    ok(&d, &["claim", &id, "--by", "gen"]);
+    let mut rng = Rng(0x8f3a4);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_summary(generated_tag(case));
+        generated_case(&d, &["review", &id, "--summary", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            let history = i["history"].as_str().unwrap();
+            assert_eq!(
+                hist_last_value(history, "summary:").as_deref(),
+                Some(text.as_str()),
+                "case {case} review summary in {history:?}"
+            );
+            ok(&d, &["rework", &id, "--reason", "cycle"]);
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(
+        ok_n > 0 && bad_n > 0,
+        "review summary ok={ok_n} bad={bad_n}"
+    );
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_rework_reason_cases() {
+    let d = dir("genrework");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    ok(&d, &["claim", &id, "--by", "gen"]);
+    ok(&d, &["review", &id]);
+    let mut rng = Rng(0x8f3a5);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_reason(generated_tag(case));
+        generated_case(&d, &["rework", &id, "--reason", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            let history = i["history"].as_str().unwrap();
+            assert_eq!(
+                hist_last_value(history, "rework requested:").as_deref(),
+                Some(text.as_str()),
+                "case {case} rework reason in {history:?}"
+            );
+            ok(&d, &["review", &id]);
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "rework reason ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_revise_reason_cases() {
+    let d = dir("genrevise");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    let mut rng = Rng(0x8f3a6);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_reason(generated_tag(case));
+        generated_case(&d, &["revise", &id, "--reason", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            let history = i["history"].as_str().unwrap();
+            assert_eq!(
+                hist_last_value(history, "revised:").as_deref(),
+                Some(text.as_str()),
+                "case {case} revise reason in {history:?}"
+            );
+            ok(&d, &["approve", &id]);
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "revise reason ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_close_reason_cases() {
+    let d = dir("genclose");
+    ok(&d, &["init", "--no-hooks"]);
+    let jig = d.join(".jig");
+    let mut rng = Rng(0x8f3a7);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_reason(generated_tag(case));
+        let id = add(&d, "g");
+        generated_case(&d, &["close", &id, "--reason", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            let history = i["history"].as_str().unwrap();
+            assert_eq!(
+                hist_last_value(history, "closed:").as_deref(),
+                Some(text.as_str()),
+                "case {case} close reason in {history:?}"
+            );
+            fs::remove_file(jig.join("closed").join(format!("{id}.md"))).unwrap();
+        } else {
+            bad_n += 1;
+            fs::remove_file(jig.join("open").join(format!("{id}.md"))).unwrap();
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "close reason ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_close_summary_cases() {
+    let d = dir("genclosesum");
+    ok(&d, &["init", "--no-hooks"]);
+    let jig = d.join(".jig");
+    let mut rng = Rng(0x8f3a8);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_summary(generated_tag(case));
+        let id = add(&d, "g");
+        generated_case(
+            &d,
+            &["close", &id, "--reason", "r", "--summary", &text],
+            accept,
+            case,
+        );
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            assert_eq!(
+                i["closing_summary"].as_str().unwrap(),
+                text,
+                "case {case} closing_summary"
+            );
+            fs::remove_file(jig.join("closed").join(format!("{id}.md"))).unwrap();
+        } else {
+            bad_n += 1;
+            fs::remove_file(jig.join("open").join(format!("{id}.md"))).unwrap();
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "close summary ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_reopen_reason_cases() {
+    let d = dir("genreopen");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    ok(&d, &["close", &id, "--reason", "seed"]);
+    let mut rng = Rng(0x8f3a9);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_reason(generated_tag(case));
+        generated_case(&d, &["reopen", &id, "--reason", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            let history = i["history"].as_str().unwrap();
+            assert_eq!(
+                hist_last_value(history, "reopened:").as_deref(),
+                Some(text.as_str()),
+                "case {case} reopen reason in {history:?}"
+            );
+            ok(&d, &["close", &id, "--reason", "reclose"]);
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "reopen reason ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_note_cases() {
+    let d = dir("gennote");
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "seed");
+    let mut rng = Rng(0x8f3aa);
+    let (mut ok_n, mut bad_n) = (0usize, 0usize);
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        let accept = ok_note(generated_tag(case));
+        generated_case(&d, &["note", &id, "--", &text], accept, case);
+        if accept {
+            ok_n += 1;
+            let i = show_value(&d, &id);
+            let last = i["notes"].as_str().unwrap().lines().last().unwrap();
+            assert_eq!(
+                last.splitn(5, ' ').nth(4).unwrap_or_default(),
+                text,
+                "case {case} note line {last:?}"
+            );
+        } else {
+            bad_n += 1;
+        }
+    }
+    assert!(ok_n > 0 && bad_n > 0, "note ok={ok_n} bad={bad_n}");
+    assert!(ok_n + bad_n >= 100);
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn generated_remember_cases() {
+    let d = dir("genmemory");
+    ok(&d, &["init", "--no-hooks"]);
+    let mut rng = Rng(0x8f3ab);
+    let mut ok_n = 0usize;
+    for case in 0..110 {
+        let text = generated_text(&mut rng, case);
+        generated_case(&d, &["remember", "gen.topic", "--", &text], true, case);
+        ok_n += 1;
+        let out = ok(&d, &["recall", "gen.topic", "--json"]);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["value"].as_str().unwrap(), text, "case {case} memory");
+    }
+    assert!(ok_n >= 100, "memory accepts every value, got {ok_n}");
+    assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn init_config_splice_styles_match_surroundings() {
+    let two = concat!(
+        "{\n  \"model\": \"opus\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n",
+        "        \"hooks\": [\n          {\n            \"type\": \"command\",\n",
+        "            \"command\": \"jig start --hook-json\",\n            \"timeout\": 5\n",
+        "          }\n        ]\n      }\n    ]\n  }\n}\n"
+    );
+    let four = concat!(
+        "{\n    \"hooks\": {\n        \"PostToolUse\": [{\"hooks\": []}],\n",
+        "        \"SessionStart\": [\n            {\n                \"hooks\": [\n",
+        "                    {\n                        \"type\": \"command\",\n",
+        "                        \"command\": \"jig start --hook-json\",\n",
+        "                        \"timeout\": 5\n                    }\n                ]\n",
+        "            }\n        ]\n    }\n}"
+    );
+    let tab = concat!(
+        "{\n\t\"hooks\": {\n\t\t\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"old\"}]},\n",
+        "\t\t\t{\n\t\t\t\t\"hooks\": [\n\t\t\t\t\t{\n",
+        "\t\t\t\t\t\t\"type\": \"command\",\n",
+        "\t\t\t\t\t\t\"command\": \"jig start --hook-json\",\n",
+        "\t\t\t\t\t\t\"timeout\": 5\n\t\t\t\t\t}\n\t\t\t\t]\n",
+        "\t\t\t}\n\t\t]\n\t}\n}"
+    );
+    let crlf = concat!(
+        "{\r\n  \"hooks\": {\r\n    \"SessionStart\": [\r\n      {\r\n",
+        "        \"hooks\": [\r\n          {\r\n            \"type\": \"command\",\r\n",
+        "            \"command\": \"jig start --hook-json\",\r\n            \"timeout\": 5\r\n",
+        "          }\r\n        ]\r\n      }\r\n    ]\r\n  }\r\n}\r\n"
+    );
+    let mixed = concat!(
+        "{\n    \"model\": 1, \"hooks\": {\n        \"SessionStart\": [\n            {\n",
+        "                \"hooks\": [\n                    {\n",
+        "                        \"type\": \"command\",\n",
+        "                        \"command\": \"jig start --hook-json\",\n",
+        "                        \"timeout\": 5\n                    }\n                ]\n",
+        "            }\n        ]\n    }\n}"
+    );
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "mixed_inline_sibling",
+            "{\n    \"model\": 1, \"hooks\": {}\n}",
+            mixed,
+        ),
+        ("two_space_infer_root", "{\n  \"model\": \"opus\"\n}\n", two),
+        (
+            "four_space_missing_sessionstart",
+            "{\n    \"hooks\": {\n        \"PostToolUse\": [{\"hooks\": []}]\n    }\n}",
+            four,
+        ),
+        (
+            "tab_populated_array",
+            "{\n\t\"hooks\": {\n\t\t\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"old\"}]}]\n\t}\n}",
+            tab,
+        ),
+        (
+            "crlf_empty_array",
+            "{\r\n  \"hooks\": {\r\n    \"SessionStart\": []\r\n  }\r\n}\r\n",
+            crlf,
+        ),
+        (
+            "compact_empty",
+            "{}",
+            "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}",
+        ),
+        (
+            "compact_final_lf",
+            "{}\n",
+            "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}\n",
+        ),
+        (
+            "compact_member",
+            "{\"model\": \"opus\"}",
+            "{\"model\": \"opus\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}",
+        ),
+    ];
+    for (name, orig, expected) in cases {
+        let d = dir(&format!("style{name}"));
+        for cfg in [".claude/settings.json", ".codex/hooks.json"] {
+            let path = d.join(cfg);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, orig).unwrap();
+        }
+        ok(&d, &["init"]);
+        for cfg in [".claude/settings.json", ".codex/hooks.json"] {
+            let result = fs::read_to_string(d.join(cfg)).unwrap();
+            assert_eq!(&result, expected, "{name} {cfg}");
+            let v: Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(
+                v["hooks"]["SessionStart"]
+                    .as_array()
+                    .unwrap()
+                    .last()
+                    .unwrap()["hooks"][0],
+                json!({"type":"command","command":"jig start --hook-json","timeout":5}),
+                "{name} {cfg} group"
+            );
+        }
+        ok(&d, &["init"]);
+        for cfg in [".claude/settings.json", ".codex/hooks.json"] {
+            assert_eq!(
+                fs::read_to_string(d.join(cfg)).unwrap(),
+                *expected,
+                "{name} {cfg} idempotent"
+            );
+        }
+    }
+}
+
+#[test]
+fn list_tree_tolerate_bad_files_and_reattach_orphans() {
+    let d = dir("treebad");
+    ok(&d, &["init", "--no-hooks"]);
+    let p = add(&d, "root");
+    let mid = ok(&d, &["add", "mid", "--parent", &p, "--approved"])
+        .trim()
+        .to_string();
+    let leaf = ok(&d, &["add", "leaf", "--parent", &mid, "--approved"])
+        .trim()
+        .to_string();
+    let other = add(&d, "other");
+
+    let mid_file = d.join(format!(".jig/open/{mid}.md"));
+    let text = fs::read_to_string(&mid_file).unwrap();
+    fs::write(&mid_file, text.replace("assignee: null", "assignee: \"x\"")).unwrap();
+    fs::write(d.join(".jig/open/B-dead00.md"), "not an issue").unwrap();
+
+    let o = run(&d, &["tree", &p]);
+    assert!(o.status.success(), "tree tolerates bad files");
+    let out = String::from_utf8(o.stdout).unwrap();
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        warn.contains(".jig/open/B-dead00.md") && warn.contains("jig check"),
+        "{warn}"
+    );
+    assert!(
+        warn.contains(&format!(".jig/open/{mid}.md")),
+        "warning must name the unusable record: {warn}"
+    );
+    assert!(out.contains(&format!("{p} open root")), "{out}");
+    assert!(
+        out.contains(&format!("  {leaf} open leaf")),
+        "orphan must reattach under nearest visible ancestor: {out}"
+    );
+    assert!(!out.contains(&format!("{mid} ")), "{out}");
+
+    let o = run(&d, &["tree", &p, "--json"]);
+    assert!(o.status.success());
+    let j: Value = serde_json::from_str(&String::from_utf8(o.stdout).unwrap()).unwrap();
+    let kids = j["children"].as_array().unwrap();
+    assert!(
+        kids.iter().any(|k| k["id"].as_str() == Some(leaf.as_str())),
+        "{j}"
+    );
+    assert!(
+        !serde_json::to_string(&j)
+            .unwrap()
+            .contains(&format!("\"id\":\"{mid}\"")),
+        "{j}"
+    );
+
+    let o = run(&d, &["list", "--json"]);
+    assert!(o.status.success());
+    let warn = String::from_utf8_lossy(&o.stderr);
+    assert!(warn.contains("jig check"), "{warn}");
+    let rows: Value = serde_json::from_str(&String::from_utf8(o.stdout).unwrap()).unwrap();
+    let ids: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&p.as_str()) && ids.contains(&leaf.as_str()) && ids.contains(&other.as_str()),
+        "{ids:?}"
+    );
+    assert!(
+        !ids.contains(&mid.as_str()) && !ids.contains(&"B-dead00"),
+        "{ids:?}"
+    );
+
+    let o = run(&d, &["ready"]);
+    assert!(o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("jig check"));
+
+    let e = bad(&d, &["tree", &mid]);
+    assert!(e.contains("inconsistent") || e.contains("unusable"), "{e}");
+    let e = bad(&d, &["show", &mid]);
+    assert!(e.contains("inconsistent") || e.contains("unusable"), "{e}");
+    let t = ok(&d, &["tree", &other]);
+    assert!(t.contains(&format!("{other} open other")), "{t}");
+}
+
+#[test]
+fn read_lists_skip_each_bad_file_once() {
+    for kind in ["unreadable", "conflict", "duplicate", "wrong_directory"] {
+        let d = dir(&format!("skip{kind}"));
+        ok(&d, &["init", "--no-hooks"]);
+        let root = add(&d, "root");
+        let good = ok(&d, &["add", "good", "--parent", &root, "--approved"])
+            .trim()
+            .to_string();
+        let bad = ok(&d, &["add", "bad", "--parent", &root, "--approved"])
+            .trim()
+            .to_string();
+        let healthy = add(&d, "healthy");
+        let open_bad = d.join(format!(".jig/open/{bad}.md"));
+        let open_text = fs::read_to_string(&open_bad).unwrap();
+        let closed_bad = d.join(format!(".jig/closed/{bad}.md"));
+        let mut extra_bad: Option<String> = None;
+
+        match kind {
+            "unreadable" => fs::write(&open_bad, b"\xff\xfe garbage").unwrap(),
+            "conflict" => {
+                let pos = open_text.find("---\n\n").unwrap() + 5;
+                fs::write(
+                    &open_bad,
+                    format!(
+                        "{}<<<<<<< A\nx\n=======\ny\n>>>>>>> B\n\n{}",
+                        &open_text[..pos],
+                        &open_text[pos..]
+                    ),
+                )
+                .unwrap();
+            }
+            "duplicate" => {
+                fs::write(
+                    &closed_bad,
+                    open_text.replace("status: open", "status: closed"),
+                )
+                .unwrap();
+            }
+            "wrong_directory" => {
+                let bad2 = ok(&d, &["add", "bad2", "--parent", &root, "--approved"])
+                    .trim()
+                    .to_string();
+                let open_bad2 = d.join(format!(".jig/open/{bad2}.md"));
+                let open_text2 = fs::read_to_string(&open_bad2).unwrap();
+                fs::write(&closed_bad, &open_text).unwrap();
+                fs::remove_file(&open_bad).unwrap();
+                fs::write(
+                    &open_bad2,
+                    open_text2.replace("status: open", "status: closed"),
+                )
+                .unwrap();
+                extra_bad = Some(bad2);
+            }
+            _ => unreachable!(),
+        }
+
+        let warned_list: Vec<String> = match kind {
+            "unreadable" | "conflict" => vec![format!(".jig/open/{bad}.md")],
+            "duplicate" => vec![
+                format!(".jig/open/{bad}.md"),
+                format!(".jig/closed/{bad}.md"),
+            ],
+            _ => vec![
+                format!(".jig/closed/{bad}.md"),
+                format!(".jig/open/{}.md", extra_bad.as_ref().unwrap()),
+            ],
+        };
+        let warned_ready: Vec<&str> = warned_list
+            .iter()
+            .filter(|p| p.starts_with(".jig/open"))
+            .map(String::as_str)
+            .collect();
+        let bad_ids: Vec<&str> = [Some(bad.as_str()), extra_bad.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let abs = d.to_string_lossy().to_string();
+
+        let assert_run = |args: &[&str], warned: &[String]| -> Output {
+            let o = run(&d, args);
+            assert!(
+                o.status.success(),
+                "{kind} {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            assert!(!stderr.contains(&abs), "{kind} {args:?} abs path: {stderr}");
+            for line in stderr.lines().filter(|l| !l.is_empty()) {
+                assert!(line.contains("jig check"), "{kind} warning: {line}");
+            }
+            for path in warned {
+                assert_eq!(
+                    stderr.matches(path.as_str()).count(),
+                    1,
+                    "{kind} {args:?} must warn {path} exactly once: {stderr}"
+                );
+            }
+            o
+        };
+
+        let warned_ready_owned: Vec<String> = warned_ready.iter().map(|s| s.to_string()).collect();
+        for args in [
+            vec!["ready"],
+            vec!["list"],
+            vec!["list", "--json"],
+            vec!["tree", &root],
+            vec!["tree", &root, "--json"],
+        ] {
+            let warned = if args[0] == "ready" {
+                &warned_ready_owned
+            } else {
+                &warned_list
+            };
+            let o = assert_run(&args, warned);
+            let stdout = String::from_utf8(o.stdout).unwrap();
+            assert!(
+                stdout.contains(&root),
+                "{kind} {args:?} root missing: {stdout}"
+            );
+            if args[0] != "tree" {
+                assert!(
+                    stdout.contains(&healthy),
+                    "{kind} {args:?} healthy issue missing: {stdout}"
+                );
+            }
+            if args[0] != "ready" {
+                assert!(
+                    stdout.contains(&good),
+                    "{kind} {args:?} good child missing: {stdout}"
+                );
+            }
+            for b in &bad_ids {
+                if args.contains(&"--json") {
+                    assert!(
+                        !stdout.contains(&format!("\"id\":\"{b}\"")),
+                        "{kind} {args:?} bad id leaked: {stdout}"
+                    );
+                } else {
+                    assert!(
+                        !stdout.contains(&format!("{b} ")),
+                        "{kind} {args:?} bad id leaked: {stdout}"
+                    );
+                }
+            }
+        }
+
+        for b in &bad_ids {
+            assert!(!run(&d, &["tree", b]).status.success(), "{kind} tree {b}");
+            assert!(!run(&d, &["show", b]).status.success(), "{kind} show {b}");
+        }
+
+        let o = run(&d, &["check"]);
+        assert_eq!(o.status.code(), Some(1));
+        let text = String::from_utf8(o.stdout).unwrap();
+        assert!(!text.contains(&abs), "{kind} check text abs: {text}");
+        let o = run(&d, &["check", "--json"]);
+        assert_eq!(o.status.code(), Some(1));
+        let stdout = String::from_utf8(o.stdout).unwrap();
+        assert!(!stdout.contains(&abs), "{kind} check json abs: {stdout}");
+        let problems: Vec<Value> = serde_json::from_str(&stdout).unwrap();
+        for path in &warned_list {
+            let p = problems
+                .iter()
+                .find(|p| p["path"].as_str() == Some(path.as_str()))
+                .unwrap_or_else(|| panic!("{kind} missing problem for {path}: {stdout}"));
+            let problem = p["problem"].as_str().unwrap();
+            assert!(Path::new(path).is_relative());
+            assert!(
+                !problem.contains(path.as_str()),
+                "{kind} problem repeats its path: {problem}"
+            );
+            assert!(!p["hint"].as_str().unwrap().is_empty());
+            let line = text
+                .lines()
+                .find(|l| l.starts_with(&format!("{path}: ")))
+                .unwrap_or_else(|| panic!("{kind} text report lacks {path}: {text}"));
+            assert!(
+                !line[path.len() + 2..].contains(path.as_str()),
+                "{kind} report line repeats path: {line}"
+            );
+        }
+        if kind == "conflict" {
+            assert!(
+                problems.iter().any(|p| {
+                    p["path"].as_str() == Some(format!(".jig/open/{bad}.md").as_str())
+                        && p["problem"]
+                            .as_str()
+                            .unwrap()
+                            .contains("merge conflict markers present")
+                }),
+                "{kind} conflict cause missing: {stdout}"
+            );
+        }
+    }
 }

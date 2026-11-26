@@ -18,8 +18,11 @@ contract and acceptance checks for v1.
   default: a marker-delimited `## Issue tracking with EntropyJig` block in
   the project's `AGENTS.md`, and a project-local SessionStart hook running
   `jig start --hook-json` merged into `.claude/settings.json` and
-  `.codex/hooks.json`. The merge preserves existing configuration, refuses
-  malformed files instead of rewriting them, and is idempotent.
+  `.codex/hooks.json`. The merge inserts only the new hook group into the
+  existing text: every other byte of the file, including key order,
+  indentation, and whitespace, stays unchanged. A missing file is created
+  with only the required structure. The merge refuses malformed files
+  instead of rewriting them, and is idempotent.
   `--no-hooks` skips the hook configuration only; it is not an uninstall
   and `AGENTS.md` is still updated. `jig` must be on `PATH` for the clients;
   users confirm the hook once via `/hooks` (Codex) or the client's own
@@ -35,9 +38,10 @@ contract and acceptance checks for v1.
 ### Files, IDs, And Concurrent Work
 
 - There is one Markdown file per issue, with YAML frontmatter and a
-  human-readable body. Active statuses (`open`, `in_progress`, `review`) live
-  in `.jig/open/`; closed issues live in `.jig/closed/`. The archive can be
-  browsed without `jig`. Closing and reopening move the file, not its ID.
+  human-readable body. Active statuses (`proposed`, `open`, `claimed`,
+  `review`) live in `.jig/open/`; closed issues live in `.jig/closed/`. The
+  archive can be browsed without `jig`. Closing and reopening move the file,
+  not its ID.
 - Keep existing identifiers such as `B440`. New top-level issues use `B-`
   followed by exactly six lowercase hex digits. There is no hidden longer ID
   or variable abbreviation. Generate the hex from a hash of a random local
@@ -58,31 +62,57 @@ contract and acceptance checks for v1.
 
 ### Issue Workflow
 
+- The lifecycle is `proposed` → `open` → `claimed` → `review` → `closed`.
+  `proposed` means the contract is not approved yet and the issue is not
+  work. `add` creates a `proposed` issue, including subtasks created with
+  `--parent`; `add --approved` creates it directly as `open`. Agents create
+  issues without `--approved`; approving is a human action.
+- `approve ID` moves a `proposed` issue to `open` and records a history
+  entry. `revise ID --reason TEXT` returns an `open` issue to `proposed`
+  when its approved contract has to be reworked before anyone starts on
+  it. Both are workflow rules for humans, not an access-control boundary.
+  The status applies to one issue only: a `proposed` parent does not hide
+  its subtree, and approving a parent does not approve its children.
 - `ready` shows only `open` issues that are not deferred and whose blockers
   are all closed. A missing blocker is not a closed blocker. `depends_on`
   records blockers on the waiting issue; `dep add` rejects cycles. Parenthood
   alone is not a dependency. Deferring a parent hides the entire subtree
   without editing the children; their own blockers and deferrals still apply.
+- An issue whose blocker or ancestor is missing or unreadable is not ready.
+  `ready` skips it, still lists every other eligible issue, prints one
+  warning per skipped issue to stderr naming the unresolved reference and
+  pointing to `jig check`, and exits 0. JSON on stdout keeps its normal
+  shape. `claim` of such an issue fails as before.
+- `list` and `tree` never fail as a whole because of one bad issue file
+  (unreadable, conflicted, duplicated, or in the wrong directory). They
+  list every readable issue, print one warning per skipped file to stderr
+  pointing to `jig check`, and exit 0 with JSON on stdout in its normal
+  shape. `tree` of an ID whose own file is unusable fails, and `show` of
+  such an ID fails as before.
 - `claim ID` rechecks eligibility under the lock before switching to
-  `in_progress`. `--by` is an optional label, not identity or authentication.
+  `claimed`. It refuses `proposed` issues, also with `--force`.
+  `--by` is an optional label, not identity or authentication.
   Do not infer a label from the account or machine. `ready` and `show` never
   reserve work. Agents read the issue and start work only after `claim`
   succeeds. There is no separate read receipt.
-- `claim ID --force` bypasses only existing open blockers, not deferral,
-  malformed or missing dependencies, or a claim held by someone else. It
+- `claim ID --force` bypasses only existing unfinished blockers (any active
+  status: `proposed`, `open`, `claimed`, or `review`), not the issue's own
+  `proposed` status, deferral, malformed or missing dependencies, or a
+  claim held by someone else. It
   does not change dependencies or make the issue appear in `ready`. It
   records one short history entry with the time, supplied assignee (if any),
   and bypassed blocker IDs. No `--reason` is required. Agents use `--force`
   only at a person's explicit instruction for that issue.
-- `unclaim` releases an in-progress issue back to `open`. `review` submits
+- `unclaim` releases a `claimed` issue back to `open`. `review` submits
   the work for verification, preserves the assignment, and does not unblock
-  dependents. `request-changes ID --reason TEXT` returns an issue in `review`
-  to `in_progress` with the same assignment. There may be any number of
+  dependents. `rework ID --reason TEXT` returns an issue in `review`
+  to `claimed` with the same assignment. There may be any number of
   review rounds; none overwrites a previous round. Reviewers can use `note`
   without changing the status.
 - A human may `close ID --reason TEXT` from any active status, with or
-  without a code change or prior review. Fixed, duplicate, rejected,
-  obsolete, and working-as-designed issues use the same `closed` status.
+  without a code change or prior review, including a rejected `proposed`
+  issue. Fixed, duplicate, rejected, obsolete, and working-as-designed
+  issues use the same `closed` status.
   Agents submit work for review rather than close issues; this is a workflow
   rule, not an access-control boundary.
 - `reopen ID --reason TEXT` moves a closed issue back to `open/`, clears its
@@ -98,12 +128,13 @@ contract and acceptance checks for v1.
 
 ### History, Notes, And Manual Summaries
 
-- `## History` records review submissions, requests for changes, closure,
-  reopening, and forced claims. Append entries with a UTC date and time down
-  to seconds. Keep existing entries even when the same transition occurs
+- `## History` records approvals, revisions, review submissions, rework
+  requests, closure, reopening, and forced claims. Append entries with a UTC
+  date and time down to seconds. Keep existing entries even when the same transition occurs
   several times. Timestamps are not used to pick winners after synchronization.
-- `--reason` says why someone closed, reopened, or returned an issue for
-  changes. Record it in the history entry; do not duplicate it in YAML.
+- `--reason` says why someone closed, reopened, revised, or returned an
+  issue for rework. Record it in the history entry; do not duplicate it in
+  YAML.
   Closing and reopening update the current state and closing date in YAML.
 - An agent can add a manual summary with `review ID --summary TEXT`. Keep
   it with that round's history entry. `close ID --reason TEXT` also accepts
@@ -133,6 +164,30 @@ contract and acceptance checks for v1.
   No automatic key generation or `--key` is needed. `start` never loads the
   full memory automatically.
 
+### Registry Check
+
+- `jig check [--json]` reports every integrity problem in one run instead
+  of stopping at the first: unreadable issue files, a file name that does
+  not match the ID, a status that does not belong in its directory,
+  duplicate IDs, merge conflict markers, missing blockers or ancestors,
+  dependency cycles, inconsistent fields (for example a `proposed` or
+  `open` issue with `claim_id` or `assignee`, a `claimed` issue without
+  `claim_id`, or `closed_at` or a closing summary on an active issue), a
+  pending or mismatched move record, an unreadable
+  `memory.md`, unexpected files in `open/` or `closed/`, and the legacy
+  `/.*.tmp-*` rule in `.jig/.gitignore`.
+- Unknown legacy metadata is not a problem: a `closed` issue may have
+  `closed_at: null`, and an issue in `review` may have no `assignee` or
+  `claim_id` if it was never claimed. `rework` of such an issue assigns a
+  new `claim_id` and invents no assignee.
+- Each problem names the file, what is wrong, and a concrete way to
+  resolve it (a `jig` command or the manual edit or Git action). JSON is an
+  array of `{path,problem,hint}`. Exit 0 when clean, 1 otherwise.
+- `check` only reports. It never modifies, repairs, or finishes a pending
+  move; every resolution is an explicit human decision. Agents run `check`
+  when `ready` warns and report the result to a person instead of removing
+  dependencies or editing files to get unblocked.
+
 ## File And CLI Details
 
 - **Reopening a summarized issue.** Preserve the former closing summary
@@ -159,6 +214,11 @@ contract and acceptance checks for v1.
   `{workflow}`; `recall` returns an array of topic names or `{topic,value}`
   for one topic. Successful output goes to stdout; errors go to stderr
   with a nonzero exit code and no partial JSON.
+- **Read-only access.** Read commands (`start`, `ready`, `show`, `list`,
+  `tree`, `recall`, `check`) work in a checkout without write access to
+  `.jig/`; they do not need to create or write `.jig/.lock`. Where they can
+  write, the non-`check` read commands may finish an interrupted move as
+  before; where they cannot, a pending move is reported as an error.
 - **Chronological lists.** `list --sort oldest|newest` sorts by `created_at`
   regardless of priority, keeping unknown dates last and breaking ties by ID.
   Text includes the stored date (`-` when missing); JSON changes only row
@@ -191,3 +251,18 @@ contract and acceptance checks for v1.
 - Check one-line note bounds, both `--body` input modes, compact JSON, and
   selective memory loading. Verify that read commands never dump unrelated
   bodies into agent context.
+- Walk the full lifecycle: `add` creates `proposed`, which neither `ready`
+  nor `claim` (also with `--force`) accepts; `approve` makes it ready;
+  `revise` returns it to `proposed`; `add --approved` starts at `open`;
+  `rework` returns `review` to `claimed`; a rejected proposal closes.
+- Run `init` against existing `.claude/settings.json` and
+  `.codex/hooks.json` with custom key order and formatting, and verify that
+  every byte outside the inserted hook group is unchanged.
+- Seed a missing blocker and a missing parent: `ready` lists the other
+  eligible issues, warns on stderr, and exits 0; `claim` of the affected
+  issue fails. Add a file with merge conflict markers: `ready`, `list`, and
+  `tree` still list every other issue, warn, and exit 0.
+- Seed one instance of every `check` problem: a single `check` run reports
+  all of them with hints and changes no byte in the registry.
+- Remove write access from a freshly cloned registry without `.lock`: all
+  read commands succeed.

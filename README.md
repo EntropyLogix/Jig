@@ -28,6 +28,7 @@ cd myproject
 jig init                    # creates the registry and sets up agent integration
 jig start                   # short workflow summary
 id=$(jig add "Fix flaky test" -p 1 --body "details here")
+jig approve "$id"           # a proposal becomes open work (human action)
 jig ready                   # unblocked open issues
 jig show "$id"              # full issue (works from subdirectories)
 jig claim "$id" --by agent-1
@@ -47,16 +48,18 @@ through `.jig/.move` (a crashed move is finished on the next command).
 ```text
 jig init [--no-hooks]
 jig start [--json|--hook-json]
-jig add TITLE [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]
+jig add TITLE [--approved] [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]
 jig ready [--json]
 jig show ID [--json]
-jig list [--status open|in_progress|review|closed|all] [--sort oldest|newest] [--json]
+jig list [--status proposed|open|claimed|review|closed|all] [--sort oldest|newest] [--json]
 jig tree ID [--json]
+jig approve ID
+jig revise ID --reason TEXT
 jig claim ID [--by NAME] [--force]
 jig unclaim ID
 jig update ID [--title T] [-p|--priority N] [--body TEXT|-]
 jig review ID [--summary TEXT]
-jig request-changes ID --reason TEXT
+jig rework ID --reason TEXT
 jig close ID --reason TEXT [--summary TEXT]
 jig reopen ID --reason TEXT
 jig dep add|rm ID BLOCKER
@@ -64,11 +67,51 @@ jig note ID TEXT [--by NAME]
 jig defer ID --until YYYY-MM-DD | --clear
 jig remember TOPIC TEXT
 jig recall [TOPIC] [--json]
+jig check [--json]
 ```
 
-`--json` may appear before or after the command for read commands. `--` stops
-option parsing. `--body -` reads standard input; omitting `--body` never reads
-stdin. A bare six-hex suffix (`a3f8c1`) is accepted as shorthand for `B-a3f8c1`.
+A bare `jig` prints the command reference above (same as `jig help`,
+`jig --help`, or `jig -h`). `--json` may appear before or after the command for
+read commands. `--` stops option parsing. `--body -` reads standard input;
+omitting `--body` never reads stdin. A bare six-hex suffix (`a3f8c1`) is
+accepted as shorthand for `B-a3f8c1`.
+
+`jig check` audits the registry and reports every problem in one run —
+unreadable issue files, name/ID mismatches, statuses in the wrong directory,
+duplicate IDs, conflict markers, missing blockers or ancestors, dependency
+cycles, inconsistent fields, a pending or mismatched `.jig/.move` journal, an
+unreadable `memory.md`, unexpected files, and a leftover legacy `/.*.tmp-*`
+rule in `.jig/.gitignore` (the anchored form never ignored nested temporary
+files). Each problem prints as `{path,problem,hint}` (JSON or text);
+exit is 1 when problems exist, 0 when clean. `check` only reports — it never
+modifies `.jig/`, finishes a pending move, or creates `.jig/.lock`. Agents do
+not repair registries: when `jig ready` warns, run `jig check` and report the
+result to a human instead of removing dependencies or editing files.
+
+`jig ready` is tolerant: a corrupt or inconsistent open record is skipped with
+one `jig: warning:` line on stderr while valid issues are still listed and the
+exit stays 0. `jig list` and `jig tree` are tolerant the same way — every
+readable issue is listed and each skipped file (unreadable, conflicted,
+duplicated, or in the wrong directory) produces one warning; `tree` reattaches
+children of an unusable intermediate node under the nearest visible dotted
+ancestor. Pointed reads still fail on an unusable record: `show ID` and
+`tree ID` refuse an ID whose own file is unusable, as does `claim`. Read
+commands (`start`, `ready`, `show`, `list`, `tree`, `recall`, `check`) also
+work on a checkout without write access to `.jig/`; they never need to create
+`.jig/.lock`. On a writable registry a read command may finish an interrupted
+move under an upgraded lock; where it cannot write, a pending move is reported
+as an error.
+
+`jig defer ID --until YYYY-MM-DD` hides an issue from `ready` until that date
+(a deferral ending today no longer hides it); `jig defer ID --clear` removes
+the marker and is allowed on a closed issue. Closed ancestors never defer
+their descendants.
+
+`jig add` creates a `proposed` issue — a contract draft, not work; agents add
+without `--approved`. A human moves it to `open` with `jig approve` (or
+`--approved` at creation), returns it with `jig revise --reason`, or rejects it
+with `jig close`. Work runs `open` → `claimed` (`jig claim`) → `review`
+(`jig review`, `jig rework` sends it back) → `closed`.
 
 Use `jig list --sort oldest` or `jig list --sort newest` to order by creation
 date rather than priority. Unknown creation dates sort last in either
@@ -88,9 +131,15 @@ it in an already-initialized checkout is the opt-in path:
   hook group running `jig start --hook-json` (no matcher: it fires for every
   session source, including after `/clear` and compaction). Codex 0.133 added the compact
   source; 0.145 or later restores the workflow before continuing an
-  automatically compacted turn. The merge preserves all existing keys, groups,
-  and array order; a file that is not valid JSON with the expected hook
-  shape, or that already contains a different/duplicated EntropyJig handler,
+  automatically compacted turn. The merge is byte-surgical: the new hook group
+  text is spliced into the original bytes, so every existing key, group, array
+  order, and byte of unrelated content is preserved — nothing is re-serialized
+  or reformatted. Inserted lines follow the file's own indentation (measured
+  tab or N-space unit), its newline style (LF or CRLF), and a one-line file
+  gains the group compactly without added whitespace. A file that is not
+  valid JSON with the expected hook shape,
+  that spells `hooks` or `SessionStart` twice (including escaped spellings),
+  or that already contains a different or duplicated EntropyJig handler,
   refuses init rather than being repaired. `jig` must be on `PATH` for both
   clients. Codex shows the new project hook once via `/hooks` for manual
   confirmation; Claude applies its own project trust. No global settings and

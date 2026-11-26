@@ -1,4 +1,6 @@
+use crate::check;
 use crate::clock;
+use crate::domain::{self, Action};
 use crate::ident;
 use crate::integration;
 use crate::issue::{self, Issue, Status};
@@ -33,15 +35,18 @@ fn usage(msg: impl Into<String>) -> Fail {
 const WORKFLOW: &str = "EntropyJig workflow\n\
 1. `jig ready` lists unblocked open work; `jig show ID` reads one issue.\n\
    `ready` output is a queue view, not approval to implement a contract.\n\
-2. `jig claim ID [--by NAME]` reserves it as in_progress; work happens outside jig.\n\
+2. `jig claim ID [--by NAME]` reserves it as claimed; work happens outside jig.\n\
    `claim --force` bypasses only live blockers and only on a human's explicit\n\
    instruction for that issue.\n\
 3. `jig review ID [--summary TEXT]` submits the work for verification;\n\
-   `jig request-changes ID --reason TEXT` returns it to in_progress.\n\
+   `jig rework ID --reason TEXT` returns it to claimed.\n\
 4. A human closes with `jig close ID --reason TEXT [--summary TEXT]`;\n\
    `jig reopen ID --reason TEXT` moves it back to open.\n\
 5. `jig note ID TEXT [--by NAME]` annotates; `jig remember TOPIC TEXT` and\n\
    `jig recall [TOPIC]` share project facts.\n\
+Agents create proposals with `jig add` without `--approved`. A proposal is not work.\n\
+Humans use `jig approve ID`, `jig revise ID --reason TEXT`, or `jig close`.\n\
+If `jig ready` warns, run `jig check` and report the result to a human; do not remove dependencies to get unblocked.\n\
 Issues are Markdown files under .jig/open and .jig/closed.";
 
 const HELP: &str = "jig - file-based issue tracker and project memory\n\
@@ -51,17 +56,19 @@ Usage: jig [--json] COMMAND [ARGS]\n\
 Commands:\n\
   init [--no-hooks]                    create .jig/, AGENTS.md, and project hooks\n\
   start [--json|--hook-json]            workflow summary\n\
-  add TITLE [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]\n\
+  add TITLE [--approved] [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]\n\
   ready [--json]                        unblocked open issues\n\
   show ID [--json]                      one full issue\n\
   list [--status S] [--sort oldest|newest] [--json]\n\
-                                        issues (S: open|in_progress|review|closed|all)\n\
+                                        issues (S: proposed|open|claimed|review|closed|all)\n\
   tree ID [--json]                      issue with descendants\n\
-  claim ID [--by NAME] [--force]        move an open issue to in_progress\n\
-  unclaim ID                            return an in_progress issue to open\n\
+  approve ID                            move a proposed issue to open\n\
+  revise ID --reason TEXT               return an open issue to proposed\n\
+  claim ID [--by NAME] [--force]        move an open issue to claimed\n\
+  unclaim ID                            return a claimed issue to open\n\
   update ID [--title T] [-p|--priority N] [--body TEXT|-]\n\
-  review ID [--summary TEXT]            submit an in_progress issue for review\n\
-  request-changes ID --reason TEXT      return a review issue to in_progress\n\
+  review ID [--summary TEXT]            submit a claimed issue for review\n\
+  rework ID --reason TEXT               return a review issue to claimed\n\
   close ID --reason TEXT [--summary T]  archive an active issue\n\
   reopen ID --reason TEXT               reactivate a closed issue\n\
   dep add|rm ID BLOCKER                 manage blockers\n\
@@ -69,6 +76,7 @@ Commands:\n\
   defer ID --until YYYY-MM-DD | --clear\n\
   remember TOPIC TEXT                   record a project fact\n\
   recall [TOPIC] [--json]               read project facts\n\
+  check [--json]                         report registry problems without repairing\n\
 \n\
 Options:\n\
   --json          machine output for read commands (before or after the command)\n\
@@ -180,6 +188,11 @@ fn registry(cwd: &Path) -> R<store::Lock> {
     store::lock(&jig).map_err(fail)
 }
 
+fn with_registry<T>(cwd: &Path, mut read: impl FnMut(&Path) -> R<T>) -> R<T> {
+    let jig = store::discover(cwd).map_err(fail)?;
+    store::with_read(&jig, store::Recovery::Allow, || read(&jig)).map_err(fail)?
+}
+
 fn resolve_id(raw: &str) -> R<String> {
     issue::id_alias(raw).ok_or_else(|| usage(format!("invalid issue id {raw:?}")))
 }
@@ -232,54 +245,33 @@ fn hist_entry(what: &str) -> String {
     format!("- {} {}", clock::now_stamp(), what)
 }
 
-fn indented(text: &str) -> String {
-    text.split('\n').collect::<Vec<_>>().join("\n  ")
+fn validated_history_text<'a>(text: &'a str, option: &str) -> R<&'a str> {
+    if text.chars().any(|c| c != '\n' && c.is_control()) {
+        return Err(usage(format!(
+            "{option}: control characters other than newline are not allowed"
+        )));
+    }
+    issue::structural_check(text, option).map_err(usage)?;
+    Ok(text)
+}
+
+fn history_text(label: &str, text: &str) -> String {
+    if !text.contains('\n') {
+        return format!("{label} {text}");
+    }
+    let mut out = label.to_string();
+    for line in text.split('\n') {
+        out.push_str("\n  > ");
+        out.push_str(line);
+    }
+    out
 }
 
 fn parse_priority(v: &str) -> R<u8> {
-    v.parse::<u8>()
-        .ok()
-        .filter(|p| *p <= 4)
-        .ok_or_else(|| usage(format!("invalid priority {v:?}; expected 0..=4")))
-}
-
-fn deferred(jig: &Path, issue: &Issue, today: &str) -> R<bool> {
-    let mut cur = issue.clone();
-    let mut seen = HashSet::new();
-    loop {
-        if !seen.insert(cur.id.clone()) {
-            return Err(fail(format!("parent cycle at {}", cur.id)));
-        }
-        if let Some(d) = &cur.defer_until
-            && d.as_str() > today
-        {
-            return Ok(true);
-        }
-        let Some(parent) = cur.parent.clone() else {
-            return Ok(false);
-        };
-        cur = match store::find(jig, &parent).map_err(fail)? {
-            Some(l) => l.issue,
-            None => {
-                return Err(fail(format!(
-                    "issue {} has missing parent {parent}",
-                    cur.id
-                )));
-            }
-        };
+    match v.as_bytes() {
+        [p @ b'0'..=b'4'] => Ok(p - b'0'),
+        _ => Err(usage(format!("invalid priority {v:?}; expected 0..=4"))),
     }
-}
-
-fn blockers(jig: &Path, issue: &Issue) -> R<Vec<String>> {
-    let mut open = Vec::new();
-    for dep in &issue.depends_on {
-        match store::find(jig, dep).map_err(fail)? {
-            Some(l) if l.issue.status == Status::Closed => {}
-            Some(_) => open.push(dep.clone()),
-            None => return Err(fail(format!("{} depends on missing issue {dep}", issue.id))),
-        }
-    }
-    Ok(open)
 }
 
 fn jopt(v: &Option<String>) -> String {
@@ -340,9 +332,28 @@ fn sort_chronologically(rows: &mut [Issue], order: CreatedOrder) {
     });
 }
 
-const JSON_CMDS: [&str; 6] = ["start", "ready", "show", "list", "tree", "recall"];
+pub struct CommandOutput {
+    pub stdout: String,
+    pub warnings: Vec<String>,
+    pub code: i32,
+}
 
-pub fn run(args: &[String], cwd: &Path) -> Result<String, Fail> {
+impl CommandOutput {
+    fn plain(stdout: String) -> CommandOutput {
+        CommandOutput {
+            stdout,
+            warnings: Vec::new(),
+            code: 0,
+        }
+    }
+}
+
+const JSON_CMDS: [&str; 7] = ["start", "ready", "show", "list", "tree", "recall", "check"];
+
+pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
+    if args.is_empty() {
+        return Ok(CommandOutput::plain(format!("{HELP}\n")));
+    }
     let mut json = false;
     let mut i = 0usize;
     let cmd = loop {
@@ -354,9 +365,20 @@ pub fn run(args: &[String], cwd: &Path) -> Result<String, Fail> {
                 json = true;
                 i += 1;
             }
-            "--" => i += 1,
-            "--help" | "-h" | "help" => return Ok(format!("{HELP}\n")),
-            "--version" => return Ok(format!("jig {}\n", env!("CARGO_PKG_VERSION"))),
+            "--" => {
+                i += 1;
+                let Some(a) = args.get(i) else {
+                    return Err(usage("missing command; try `jig --help`"));
+                };
+                break a.to_string();
+            }
+            "--help" | "-h" | "help" => return Ok(CommandOutput::plain(format!("{HELP}\n"))),
+            "--version" => {
+                return Ok(CommandOutput::plain(format!(
+                    "jig {}\n",
+                    env!("CARGO_PKG_VERSION")
+                )));
+            }
             s if s.starts_with('-') && s.len() > 1 => {
                 return Err(usage(format!("unknown option {s}")));
             }
@@ -368,25 +390,28 @@ pub fn run(args: &[String], cwd: &Path) -> Result<String, Fail> {
         return Err(usage(format!("--json is not valid for `{cmd}`")));
     }
     match cmd.as_str() {
-        "init" => cmd_init(&tail, cwd),
-        "start" => cmd_start(&tail, cwd, json),
-        "add" => cmd_add(&tail, cwd),
         "ready" => cmd_ready(&tail, cwd, json),
-        "show" => cmd_show(&tail, cwd, json),
+        "check" => cmd_check(&tail, cwd, json),
+        "init" => cmd_init(&tail, cwd).map(CommandOutput::plain),
+        "start" => cmd_start(&tail, cwd, json).map(CommandOutput::plain),
+        "add" => cmd_add(&tail, cwd).map(CommandOutput::plain),
+        "show" => cmd_show(&tail, cwd, json).map(CommandOutput::plain),
         "list" => cmd_list(&tail, cwd, json),
         "tree" => cmd_tree(&tail, cwd, json),
-        "claim" => cmd_claim(&tail, cwd),
-        "unclaim" => cmd_unclaim(&tail, cwd),
-        "update" => cmd_update(&tail, cwd),
-        "review" => cmd_review(&tail, cwd),
-        "request-changes" => cmd_request_changes(&tail, cwd),
-        "close" => cmd_close(&tail, cwd),
-        "reopen" => cmd_reopen(&tail, cwd),
-        "dep" => cmd_dep(&tail, cwd),
-        "note" => cmd_note(&tail, cwd),
-        "defer" => cmd_defer(&tail, cwd),
-        "remember" => cmd_remember(&tail, cwd),
-        "recall" => cmd_recall(&tail, cwd, json),
+        "approve" => cmd_approve(&tail, cwd).map(CommandOutput::plain),
+        "revise" => cmd_revise(&tail, cwd).map(CommandOutput::plain),
+        "claim" => cmd_claim(&tail, cwd).map(CommandOutput::plain),
+        "unclaim" => cmd_unclaim(&tail, cwd).map(CommandOutput::plain),
+        "update" => cmd_update(&tail, cwd).map(CommandOutput::plain),
+        "review" => cmd_review(&tail, cwd).map(CommandOutput::plain),
+        "rework" => cmd_rework(&tail, cwd).map(CommandOutput::plain),
+        "close" => cmd_close(&tail, cwd).map(CommandOutput::plain),
+        "reopen" => cmd_reopen(&tail, cwd).map(CommandOutput::plain),
+        "dep" => cmd_dep(&tail, cwd).map(CommandOutput::plain),
+        "note" => cmd_note(&tail, cwd).map(CommandOutput::plain),
+        "defer" => cmd_defer(&tail, cwd).map(CommandOutput::plain),
+        "remember" => cmd_remember(&tail, cwd).map(CommandOutput::plain),
+        "recall" => cmd_recall(&tail, cwd, json).map(CommandOutput::plain),
         _ => Err(usage(format!("unknown command {cmd}; try `jig --help`"))),
     }
 }
@@ -425,12 +450,13 @@ fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {
             issue::esc(WORKFLOW)
         ));
     }
-    let _lock = registry(cwd)?;
-    if json {
-        Ok(format!("{{\"workflow\":{}}}\n", issue::esc(WORKFLOW)))
-    } else {
-        Ok(format!("{WORKFLOW}\n"))
-    }
+    with_registry(cwd, |_jig| {
+        if json {
+            Ok(format!("{{\"workflow\":{}}}\n", issue::esc(WORKFLOW)))
+        } else {
+            Ok(format!("{WORKFLOW}\n"))
+        }
+    })
 }
 
 fn cmd_add(args: &[String], cwd: &Path) -> R<String> {
@@ -442,13 +468,14 @@ fn cmd_add(args: &[String], cwd: &Path) -> R<String> {
             ("--body", Arity::One, "body"),
             ("--parent", Arity::One, "parent"),
             ("--dep", Arity::Many, "dep"),
+            ("--approved", Arity::Switch, "approved"),
         ],
         &["dep"],
     )?;
     pos_n(&p, 1, "add TITLE")?;
     let title = &p.pos[0];
-    if title.is_empty() {
-        return Err(usage("empty title"));
+    if !issue::valid_label(title) {
+        return Err(usage("title must be a non-empty single line"));
     }
     let priority = match opt(&p, "priority") {
         Some(v) => Some(parse_priority(v)?),
@@ -480,7 +507,11 @@ fn cmd_add(args: &[String], cwd: &Path) -> R<String> {
     let new = Issue {
         id: id.clone(),
         title: title.clone(),
-        status: Status::Open,
+        status: if flag(&p, "approved") {
+            Status::Open
+        } else {
+            Status::Proposed
+        },
         priority,
         parent,
         depends_on,
@@ -507,7 +538,12 @@ fn next_child(jig: &Path, parent: &str) -> R<String> {
         let rd = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(fail(format!("read {}: {e}", dir.display()))),
+            Err(e) => {
+                return Err(fail(format!(
+                    "read {}: {e}",
+                    store::diagnostic_path(&dir).display()
+                )));
+            }
         };
         for ent in rd {
             let ent = ent.map_err(|e| fail(e.to_string()))?;
@@ -538,96 +574,171 @@ fn next_child(jig: &Path, parent: &str) -> R<String> {
     Ok(format!("{parent}.{next}"))
 }
 
-fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<String> {
+fn skipped_file_warnings(snap: &check::Snapshot, include: impl Fn(&Path) -> bool) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mut warned: HashSet<PathBuf> = HashSet::new();
+    for problem in &snap.problems {
+        if !include(&problem.path) || !warned.insert(problem.path.clone()) {
+            continue;
+        }
+        warnings.push(format!(
+            "skipping {}: {}; run `jig check`",
+            problem.path.display(),
+            problem.problem
+        ));
+    }
+    for rec in &snap.records {
+        if rec.usable || !include(&rec.path) || warned.contains(&rec.path) {
+            continue;
+        }
+        warned.insert(rec.path.clone());
+        let reason = domain::field_problems(&rec.issue)
+            .first()
+            .map(|(p, _)| *p)
+            .unwrap_or("unusable record");
+        warnings.push(format!(
+            "skipping {}: {reason}; run `jig check`",
+            rec.path.display()
+        ));
+    }
+    warnings
+}
+
+fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
-    let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let today = clock::today();
-    let mut rows = Vec::new();
-    for l in store::load_place(jig, Place::Open).map_err(fail)? {
-        let i = &l.issue;
-        if jig
-            .join(Place::Closed.dir())
-            .join(format!("{}.md", i.id))
-            .exists()
-        {
-            return Err(fail(format!("duplicate issue id {}", i.id)));
+    with_registry(cwd, |jig| {
+        let snap = check::scan(jig);
+        let today = clock::today();
+        let mut warnings = skipped_file_warnings(&snap, |p| p.starts_with(".jig/open"));
+        let mut rows = Vec::new();
+        for i in snap.issues() {
+            match domain::eligibility(i, &today, false, |id| snap.resolve(id)) {
+                Ok(_) => rows.push(i.clone()),
+                Err(domain::Ineligible::Reference(reference)) => warnings.push(format!(
+                    "skipping {}: unresolved {reference}; run `jig check`",
+                    i.id
+                )),
+                Err(_) => continue,
+            }
         }
-        if i.status != Status::Open {
-            continue;
-        }
-        if deferred(jig, i, &today)? {
-            continue;
-        }
-        if !blockers(jig, i)?.is_empty() {
-            continue;
-        }
-        rows.push(i.clone());
+        sort_rows(&mut rows);
+        let stdout = if json {
+            let items: Vec<String> = rows.iter().map(row_json).collect();
+            format!("[{}]\n", items.join(","))
+        } else {
+            let mut out = String::new();
+            for i in &rows {
+                let pri = i
+                    .priority
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".into());
+                out.push_str(&format!("{} {pri} {}\n", i.id, i.title));
+            }
+            out
+        };
+        Ok(CommandOutput {
+            stdout,
+            warnings,
+            code: 0,
+        })
+    })
+}
+
+fn cmd_check(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
+    let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
+    pos_n(&p, 0, "no arguments")?;
+    let json = json || flag(&p, "json");
+    let jig = store::discover_raw(cwd).map_err(fail)?;
+    let problems = store::with_read(&jig, store::Recovery::ReportOnly, || check::collect(&jig))
+        .map_err(fail)?;
+    if problems.is_empty() {
+        return Ok(CommandOutput::plain(if json {
+            "[]\n".to_string()
+        } else {
+            "registry is clean\n".to_string()
+        }));
     }
-    sort_rows(&mut rows);
-    if json {
-        let items: Vec<String> = rows.iter().map(row_json).collect();
-        Ok(format!("[{}]\n", items.join(",")))
+    let stdout = if json {
+        let items: Vec<String> = problems
+            .iter()
+            .map(|p| {
+                format!(
+                    "{{\"path\":{},\"problem\":{},\"hint\":{}}}",
+                    issue::esc(&p.path.display().to_string()),
+                    issue::esc(&p.problem),
+                    issue::esc(&p.hint)
+                )
+            })
+            .collect();
+        format!("[{}]\n", items.join(","))
     } else {
         let mut out = String::new();
-        for i in &rows {
-            let pri = i
-                .priority
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "-".into());
-            out.push_str(&format!("{} {pri} {}\n", i.id, i.title));
+        for p in &problems {
+            out.push_str(&format!(
+                "{}: {}\n  hint: {}\n",
+                p.path.display(),
+                p.problem,
+                p.hint
+            ));
         }
-        Ok(out)
-    }
+        out
+    };
+    Ok(CommandOutput {
+        stdout,
+        warnings: Vec::new(),
+        code: 1,
+    })
 }
 
 fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<String> {
     let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
     pos_n(&p, 1, "show ID")?;
     let json = json || flag(&p, "json");
-    let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
-    let i = &l.issue;
-    if json {
-        let deps = format!(
-            "[{}]",
-            i.depends_on
-                .iter()
-                .map(|d| issue::esc(d))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        Ok(format!(
-            "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
-             \"depends_on\":{},\"assignee\":{},\"defer_until\":{},\"created_at\":{},\
-             \"updated_at\":{},\"closed_at\":{},\"body\":{},\"history\":{},\"notes\":{},\
-             \"closing_summary\":{}}}\n",
-            issue::esc(&i.id),
-            issue::esc(&i.title),
-            issue::esc(i.status.as_str()),
-            i.priority
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "null".into()),
-            jopt(&i.parent),
-            deps,
-            jopt(&i.assignee),
-            jopt(&i.defer_until),
-            jopt(&i.created_at),
-            jopt(&i.updated_at),
-            jopt(&i.closed_at),
-            issue::esc(&i.body),
-            issue::esc(&i.history),
-            issue::esc(&i.notes),
-            jopt(&i.closing_summary),
-        ))
-    } else {
-        Ok(l.text.clone())
-    }
+    with_registry(cwd, |jig| {
+        let l = load(jig, &p.pos[0])?;
+        check::scan(jig).resolve(&l.issue.id).map_err(fail)?;
+        let i = &l.issue;
+        if json {
+            let deps = format!(
+                "[{}]",
+                i.depends_on
+                    .iter()
+                    .map(|d| issue::esc(d))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            Ok(format!(
+                "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
+                 \"depends_on\":{},\"assignee\":{},\"defer_until\":{},\"created_at\":{},\
+                 \"updated_at\":{},\"closed_at\":{},\"body\":{},\"history\":{},\"notes\":{},\
+                 \"closing_summary\":{}}}\n",
+                issue::esc(&i.id),
+                issue::esc(&i.title),
+                issue::esc(i.status.as_str()),
+                i.priority
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "null".into()),
+                jopt(&i.parent),
+                deps,
+                jopt(&i.assignee),
+                jopt(&i.defer_until),
+                jopt(&i.created_at),
+                jopt(&i.updated_at),
+                jopt(&i.closed_at),
+                issue::esc(&i.body),
+                issue::esc(&i.history),
+                issue::esc(&i.notes),
+                jopt(&i.closing_summary),
+            ))
+        } else {
+            Ok(l.text.clone())
+        }
+    })
 }
 
-fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<String> {
+fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_tail(
         args,
         &[
@@ -640,7 +751,11 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<String> {
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
     let filter = opt(&p, "status").unwrap_or("active").to_string();
-    if !["active", "open", "in_progress", "review", "closed", "all"].contains(&filter.as_str()) {
+    if ![
+        "active", "proposed", "open", "claimed", "review", "closed", "all",
+    ]
+    .contains(&filter.as_str())
+    {
         return Err(usage(format!("invalid status filter {filter:?}")));
     }
     let order = match opt(&p, "sort") {
@@ -653,44 +768,47 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<String> {
             )));
         }
     };
-    let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let mut rows = Vec::new();
-    let want = |s: Status| {
-        filter == "all" || (filter == "active" && s.active()) || Status::parse(&filter) == Some(s)
-    };
-    for l in store::load_all(jig).map_err(fail)? {
-        if want(l.issue.status) {
-            rows.push(l.issue.clone());
+    with_registry(cwd, |jig| {
+        let snap = check::scan(jig);
+        let want = |s: Status| {
+            filter == "all"
+                || (filter == "active" && s.active())
+                || Status::parse(&filter) == Some(s)
+        };
+        let mut rows: Vec<Issue> = snap.issues().filter(|i| want(i.status)).cloned().collect();
+        match order {
+            Some(order) => sort_chronologically(&mut rows, order),
+            None => sort_rows(&mut rows),
         }
-    }
-    match order {
-        Some(order) => sort_chronologically(&mut rows, order),
-        None => sort_rows(&mut rows),
-    }
-    if json {
-        let items: Vec<String> = rows.iter().map(row_json).collect();
-        Ok(format!("[{}]\n", items.join(",")))
-    } else {
-        let mut out = String::new();
-        for i in &rows {
-            let pri = i
-                .priority
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "-".into());
-            let who = i.assignee.clone().unwrap_or_else(|| "-".into());
-            let created = order
-                .map(|_| format!(" {}", i.created_at.as_deref().unwrap_or("-")))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "{} {} {pri} {who}{created} {}\n",
-                i.id,
-                i.status.as_str(),
-                i.title
-            ));
-        }
-        Ok(out)
-    }
+        let stdout = if json {
+            let items: Vec<String> = rows.iter().map(row_json).collect();
+            format!("[{}]\n", items.join(","))
+        } else {
+            let mut out = String::new();
+            for i in &rows {
+                let pri = i
+                    .priority
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".into());
+                let who = i.assignee.clone().unwrap_or_else(|| "-".into());
+                let created = order
+                    .map(|_| format!(" {}", i.created_at.as_deref().unwrap_or("-")))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "{} {} {pri} {who}{created} {}\n",
+                    i.id,
+                    i.status.as_str(),
+                    i.title
+                ));
+            }
+            out
+        };
+        Ok(CommandOutput {
+            stdout,
+            warnings: skipped_file_warnings(&snap, |_| true),
+            code: 0,
+        })
+    })
 }
 
 fn child_key(issue: &Issue) -> (u8, u64, String) {
@@ -703,32 +821,44 @@ fn child_key(issue: &Issue) -> (u8, u64, String) {
     }
 }
 
-fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<String> {
+fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
     pos_n(&p, 1, "tree ID")?;
     let json = json || flag(&p, "json");
-    let lock = registry(cwd)?;
-    let root = load(&lock.jig, &p.pos[0])?.issue;
-    let all = store::load_all(&lock.jig).map_err(fail)?;
-    let mut kids: HashMap<String, Vec<Issue>> = HashMap::new();
-    for l in &all {
-        if let Some(par) = &l.issue.parent {
-            kids.entry(par.clone()).or_default().push(l.issue.clone());
+    with_registry(cwd, |jig| {
+        let snap = check::scan(jig);
+        let id = resolve_id(&p.pos[0])?;
+        let root = snap.resolve(&id).map_err(fail)?;
+        let available: HashSet<&str> = snap.issues().map(|i| i.id.as_str()).collect();
+        let mut kids: HashMap<String, Vec<Issue>> = HashMap::new();
+        for i in snap.issues() {
+            let mut anc = i.parent.as_deref();
+            while let Some(a) = anc {
+                if available.contains(a) {
+                    break;
+                }
+                anc = a.rsplit_once('.').map(|(id, _)| id);
+            }
+            if let Some(a) = anc {
+                kids.entry(a.to_string()).or_default().push(i.clone());
+            }
         }
-    }
-    for v in kids.values_mut() {
-        v.sort_by_key(child_key);
-    }
-    if json {
-        Ok(format!(
-            "{}\n",
-            tree_json(&root, &kids, &mut HashSet::new())
-        ))
-    } else {
-        let mut out = String::new();
-        tree_text(&mut out, &root, &kids, 0, &mut HashSet::new());
-        Ok(out)
-    }
+        for v in kids.values_mut() {
+            v.sort_by_key(child_key);
+        }
+        let stdout = if json {
+            format!("{}\n", tree_json(&root, &kids, &mut HashSet::new()))
+        } else {
+            let mut out = String::new();
+            tree_text(&mut out, &root, &kids, 0, &mut HashSet::new());
+            out
+        };
+        Ok(CommandOutput {
+            stdout,
+            warnings: skipped_file_warnings(&snap, |_| true),
+            code: 0,
+        })
+    })
 }
 
 fn tree_json(i: &Issue, kids: &HashMap<String, Vec<Issue>>, seen: &mut HashSet<String>) -> String {
@@ -782,48 +912,27 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
     {
         return Err(usage("--by must be a non-empty single line"));
     }
+    let force = flag(&p, "force");
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let l = load(jig, &p.pos[0])?;
-    if l.place == Place::Closed {
-        return Err(fail(format!("issue {} is closed", l.issue.id)));
+    let snap = check::scan(jig);
+    if let Err(e) = snap.resolve(&l.issue.id) {
+        return Err(fail(e));
     }
-    match l.issue.status {
-        Status::Open => {}
-        Status::InProgress => {
-            let who = l
-                .issue
-                .assignee
-                .as_deref()
-                .map(|a| format!(" by {a}"))
-                .unwrap_or_default();
-            return Err(fail(format!("issue {} already claimed{who}", l.issue.id)));
-        }
-        Status::Review => {
-            return Err(fail(format!("issue {} is in review", l.issue.id)));
-        }
-        Status::Closed => unreachable!(),
+    if let Some((problem, _)) = domain::field_problems(&l.issue).first() {
+        return Err(fail(format!("issue {}: {problem}", l.issue.id)));
     }
     let today = clock::today();
-    if deferred(jig, &l.issue, &today)? {
-        return Err(fail(format!("issue {} is deferred", l.issue.id)));
-    }
-    let open_blockers = blockers(jig, &l.issue)?;
-    let force = flag(&p, "force");
-    if !open_blockers.is_empty() && !force {
-        return Err(fail(format!(
-            "issue {} blocked by {}",
-            l.issue.id,
-            open_blockers.join(", ")
-        )));
-    }
+    let bypassed = domain::eligibility(&l.issue, &today, force, |id| snap.resolve(id))
+        .map_err(|e| fail(e.message(&l.issue.id)))?;
     let by = opt(&p, "by").map(|s| s.to_string());
     let mut i = l.issue.clone();
-    i.status = Status::InProgress;
+    i.status = domain::transition(&i, Action::Claim).map_err(fail)?;
     i.assignee = by.clone();
     i.claim_id = Some(ident::new_claim_id().map_err(fail)?);
     i.updated_at = Some(clock::now_iso());
-    if force && !open_blockers.is_empty() {
+    if force && !bypassed.is_empty() {
         let who = by
             .as_deref()
             .map(|b| format!(" by {b}"))
@@ -832,7 +941,7 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
             &mut i,
             hist_entry(&format!(
                 "claimed --force{who} bypassing {}",
-                open_blockers.join(", ")
+                bypassed.join(", ")
             )),
         );
     }
@@ -841,16 +950,43 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
     Ok(format!("claimed {}{who}\n", i.id))
 }
 
+fn cmd_approve(args: &[String], cwd: &Path) -> R<String> {
+    let p = parse_tail(args, &[], &[])?;
+    pos_n(&p, 1, "approve ID")?;
+    let lock = registry(cwd)?;
+    let l = load(&lock.jig, &p.pos[0])?;
+    let mut i = l.issue.clone();
+    i.status = domain::transition(&i, Action::Approve).map_err(fail)?;
+    i.updated_at = Some(clock::now_iso());
+    hist_push(&mut i, hist_entry("approved"));
+    store::write_issue(&l, &i).map_err(fail)?;
+    Ok(format!("approved {}\n", i.id))
+}
+
+fn cmd_revise(args: &[String], cwd: &Path) -> R<String> {
+    let p = parse_tail(args, &[("--reason", Arity::One, "reason")], &[])?;
+    pos_n(&p, 1, "revise ID")?;
+    let reason = opt(&p, "reason")
+        .filter(|r| !r.trim().is_empty())
+        .ok_or_else(|| usage("--reason is required"))?;
+    let reason = validated_history_text(reason, "--reason")?;
+    let lock = registry(cwd)?;
+    let l = load(&lock.jig, &p.pos[0])?;
+    let mut i = l.issue.clone();
+    i.status = domain::transition(&i, Action::Revise).map_err(fail)?;
+    i.updated_at = Some(clock::now_iso());
+    hist_push(&mut i, hist_entry(&history_text("revised:", reason)));
+    store::write_issue(&l, &i).map_err(fail)?;
+    Ok(format!("returned {} to proposed\n", i.id))
+}
+
 fn cmd_unclaim(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_tail(args, &[], &[])?;
     pos_n(&p, 1, "unclaim ID")?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
-    if l.issue.status != Status::InProgress {
-        return Err(fail(format!("issue {} is not in progress", l.issue.id)));
-    }
     let mut i = l.issue.clone();
-    i.status = Status::Open;
+    i.status = domain::transition(&i, Action::Unclaim).map_err(fail)?;
     i.assignee = None;
     i.claim_id = None;
     i.updated_at = Some(clock::now_iso());
@@ -897,13 +1033,13 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
 fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_tail(args, &[("--summary", Arity::One, "summary")], &[])?;
     pos_n(&p, 1, "review ID")?;
+    let summary = opt(&p, "summary")
+        .map(|s| validated_history_text(s, "--summary"))
+        .transpose()?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
-    if l.issue.status != Status::InProgress {
-        return Err(fail(format!("issue {} is not in progress", l.issue.id)));
-    }
     let mut i = l.issue.clone();
-    i.status = Status::Review;
+    i.status = domain::transition(&i, Action::Review).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
     let who = i
         .assignee
@@ -911,34 +1047,36 @@ fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
         .map(|a| format!(" by {a}"))
         .unwrap_or_default();
     let mut entry = hist_entry(&format!("submitted for review{who}"));
-    if let Some(s) = opt(&p, "summary") {
-        entry.push_str(&format!("\n  summary: {}", indented(s)));
+    if let Some(s) = summary {
+        entry.push_str("\n  ");
+        entry.push_str(&history_text("summary:", s));
     }
     hist_push(&mut i, entry);
     store::write_issue(&l, &i).map_err(fail)?;
     Ok(format!("submitted {} for review\n", i.id))
 }
 
-fn cmd_request_changes(args: &[String], cwd: &Path) -> R<String> {
+fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_tail(args, &[("--reason", Arity::One, "reason")], &[])?;
-    pos_n(&p, 1, "request-changes ID")?;
+    pos_n(&p, 1, "rework ID")?;
     let reason = opt(&p, "reason")
         .filter(|r| !r.trim().is_empty())
         .ok_or_else(|| usage("--reason is required"))?;
+    let reason = validated_history_text(reason, "--reason")?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
-    if l.issue.status != Status::Review {
-        return Err(fail(format!("issue {} is not in review", l.issue.id)));
-    }
     let mut i = l.issue.clone();
-    i.status = Status::InProgress;
+    i.status = domain::transition(&i, Action::Rework).map_err(fail)?;
+    if i.claim_id.is_none() {
+        i.claim_id = Some(ident::new_claim_id().map_err(fail)?);
+    }
     i.updated_at = Some(clock::now_iso());
     hist_push(
         &mut i,
-        hist_entry(&format!("changes requested: {}", indented(reason))),
+        hist_entry(&history_text("rework requested:", reason)),
     );
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("returned {} for changes\n", i.id))
+    Ok(format!("returned {} for rework\n", i.id))
 }
 
 fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
@@ -954,22 +1092,23 @@ fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
     let reason = opt(&p, "reason")
         .filter(|r| !r.trim().is_empty())
         .ok_or_else(|| usage("--reason is required"))?;
+    let reason = validated_history_text(reason, "--reason")?;
+    let summary = opt(&p, "summary")
+        .map(|s| validated_history_text(s, "--summary"))
+        .transpose()?;
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let l = load(jig, &p.pos[0])?;
-    if l.place == Place::Closed {
-        return Err(fail(format!("issue {} is already closed", l.issue.id)));
-    }
     let now = clock::now_iso();
     let mut i = l.issue.clone();
-    i.status = Status::Closed;
+    i.status = domain::transition(&i, Action::Close).map_err(fail)?;
     i.closed_at = Some(now.clone());
     i.updated_at = Some(now);
     i.claim_id = None;
-    if let Some(s) = opt(&p, "summary") {
+    if let Some(s) = summary {
         i.closing_summary = Some(s.to_string());
     }
-    hist_push(&mut i, hist_entry(&format!("closed: {}", indented(reason))));
+    hist_push(&mut i, hist_entry(&history_text("closed:", reason)));
     store::move_issue(jig, &l, &i).map_err(fail)?;
     Ok(format!("closed {}\n", i.id))
 }
@@ -980,22 +1119,17 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
     let reason = opt(&p, "reason")
         .filter(|r| !r.trim().is_empty())
         .ok_or_else(|| usage("--reason is required"))?;
+    let reason = validated_history_text(reason, "--reason")?;
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let l = load(jig, &p.pos[0])?;
-    if l.place == Place::Open {
-        return Err(fail(format!("issue {} is already open", l.issue.id)));
-    }
     let mut i = l.issue.clone();
-    let mut entry = hist_entry(&format!("reopened: {}", indented(reason)));
+    i.status = domain::transition(&i, Action::Reopen).map_err(fail)?;
+    let mut entry = hist_entry(&history_text("reopened:", reason));
     if let Some(summary) = i.closing_summary.take() {
-        entry.push_str("\n  closing summary:");
-        for line in summary.split('\n') {
-            entry.push_str("\n  > ");
-            entry.push_str(line);
-        }
+        entry.push_str("\n  ");
+        entry.push_str(&history_text("closing summary:", &summary));
     }
-    i.status = Status::Open;
     i.assignee = None;
     i.claim_id = None;
     i.closed_at = None;
@@ -1086,8 +1220,13 @@ fn cmd_note(args: &[String], cwd: &Path) -> R<String> {
     if text.is_empty() {
         return Err(usage("note text is empty"));
     }
-    if text.contains(['\n', '\r']) {
-        return Err(usage("note text must be a single line"));
+    if text
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(usage(
+            "note text must be a single line without control characters or Unicode line separators",
+        ));
     }
     let count = text.chars().count();
     if count > 500 {
@@ -1131,7 +1270,7 @@ fn cmd_defer(args: &[String], cwd: &Path) -> R<String> {
     }
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
-    if l.place == Place::Closed {
+    if l.place == Place::Closed && until.is_some() {
         return Err(fail(format!("issue {} is closed", l.issue.id)));
     }
     let mut i = l.issue.clone();
@@ -1176,32 +1315,33 @@ fn cmd_recall(args: &[String], cwd: &Path, json: bool) -> R<String> {
         return Err(usage("expected at most one topic"));
     }
     let json = json || flag(&p, "json");
-    let lock = registry(cwd)?;
-    let mem = load_memory(&lock.jig)?;
-    match p.pos.first() {
-        None => {
-            let mut names: Vec<String> = mem.entries.iter().map(|(t, _)| t.clone()).collect();
-            names.sort();
-            if json {
-                let items: Vec<String> = names.iter().map(|n| issue::esc(n)).collect();
-                Ok(format!("[{}]\n", items.join(",")))
-            } else {
-                Ok(names.iter().map(|n| format!("{n}\n")).collect())
+    with_registry(cwd, |jig| {
+        let mem = load_memory(jig)?;
+        match p.pos.first() {
+            None => {
+                let mut names: Vec<String> = mem.entries.iter().map(|(t, _)| t.clone()).collect();
+                names.sort();
+                if json {
+                    let items: Vec<String> = names.iter().map(|n| issue::esc(n)).collect();
+                    Ok(format!("[{}]\n", items.join(",")))
+                } else {
+                    Ok(names.iter().map(|n| format!("{n}\n")).collect())
+                }
+            }
+            Some(topic) => {
+                let Some((_, v)) = mem.entries.iter().find(|(t, _)| t == topic) else {
+                    return Err(fail(format!("unknown topic {topic}")));
+                };
+                if json {
+                    Ok(format!(
+                        "{{\"topic\":{},\"value\":{}}}\n",
+                        issue::esc(topic),
+                        issue::esc(v)
+                    ))
+                } else {
+                    Ok(format!("{v}\n"))
+                }
             }
         }
-        Some(topic) => {
-            let Some((_, v)) = mem.entries.iter().find(|(t, _)| t == topic) else {
-                return Err(fail(format!("unknown topic {topic}")));
-            };
-            if json {
-                Ok(format!(
-                    "{{\"topic\":{},\"value\":{}}}\n",
-                    issue::esc(topic),
-                    issue::esc(v)
-                ))
-            } else {
-                Ok(format!("{v}\n"))
-            }
-        }
-    }
+    })
 }
