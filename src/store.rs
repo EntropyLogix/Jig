@@ -1,3 +1,4 @@
+use crate::domain;
 use crate::issue::{self, Issue, Status};
 use std::fs;
 use std::io::{self, Write};
@@ -564,7 +565,18 @@ pub fn exists(jig: &Path, id: &str) -> bool {
         .any(|p| fs::symlink_metadata(jig.join(p.dir()).join(format!("{id}.md"))).is_ok())
 }
 
+fn ensure_consistent(loaded: &Loaded) -> Result<(), String> {
+    if let Some((problem, _)) = domain::field_problems(&loaded.issue).first() {
+        return Err(format!(
+            "{}: {problem}; run `jig check`",
+            diagnostic_path(&loaded.path).display()
+        ));
+    }
+    Ok(())
+}
+
 pub fn write_issue(loaded: &Loaded, issue: &Issue) -> Result<(), String> {
+    ensure_consistent(loaded)?;
     let text = issue::encode(issue)?;
     atomic_write(&loaded.path, text.as_bytes())
 }
@@ -586,6 +598,7 @@ pub fn write_new(jig: &Path, issue: &Issue) -> Result<PathBuf, String> {
 }
 
 pub fn move_issue(jig: &Path, loaded: &Loaded, new_issue: &Issue) -> Result<(), String> {
+    ensure_consistent(loaded)?;
     let dst_dir = jig.join(loaded.place.other().dir());
     fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
     let dst = dst_dir.join(format!("{}.md", loaded.issue.id));

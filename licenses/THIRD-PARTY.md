@@ -1,6 +1,6 @@
 # Third-party runtime dependencies
 
-`entropyjig` (`jig` binary and library) depends on serde_json for editing agent
+`jig` (binary and library) depends on serde_json for editing agent
 configuration during `jig init`. The resolved runtime graph (`cargo tree
 --locked --edges normal`) and each crate's license:
 

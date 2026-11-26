@@ -3,6 +3,7 @@ pub mod clock;
 pub mod commands;
 mod domain;
 pub mod ident;
+mod instructions;
 mod integration;
 pub mod issue;
 pub mod memory;

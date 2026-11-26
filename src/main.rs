@@ -9,7 +9,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    match entropyjig::commands::run(&args, &cwd) {
+    match jig::commands::run(&args, &cwd) {
         Ok(out) => {
             for warning in &out.warnings {
                 eprintln!("jig: warning: {warning}");

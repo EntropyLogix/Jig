@@ -192,7 +192,7 @@ fn concurrent_claim_single_winner() {
     let text = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
     assert!(text.contains("status: claimed"));
     assert!(text.contains("claim_id: \""));
-    let i = entropyjig::issue::decode(&text).unwrap();
+    let i = jig::issue::decode(&text).unwrap();
     let who = i.assignee.clone().unwrap();
     assert!(who == "one" || who == "two");
 }
@@ -210,7 +210,7 @@ fn same_name_copies_get_distinct_claim_ids() {
     let o2 = ok(&d2, &["claim", "B-aaaaaa", "--by", "bot"]);
     let t1 = fs::read_to_string(d1.join(".jig/open/B-aaaaaa.md")).unwrap();
     let t2 = fs::read_to_string(d2.join(".jig/open/B-aaaaaa.md")).unwrap();
-    let cid = |t: &str| entropyjig::issue::decode(t).unwrap().claim_id.unwrap();
+    let cid = |t: &str| jig::issue::decode(t).unwrap().claim_id.unwrap();
     assert_ne!(cid(&t1), cid(&t2));
     assert!(!o1.contains(&cid(&t1)) && !o2.contains(&cid(&t2)));
 }
@@ -235,10 +235,8 @@ fn dependency_rules() {
     ok(&d, &["claim", &b, "--by", "x"]);
     ok(&d, &["review", &b]);
     ok(&d, &["claim", &a, "--force", "--by", "y"]);
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{a}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{a}.md"))).unwrap())
+        .unwrap();
     assert!(i.history.contains("bypassing"));
 
     let c = add(&d, "c");
@@ -327,10 +325,9 @@ fn defer_and_force_limits() {
     assert!(e.contains("closed"), "{e}");
 
     let today = {
-        let i = entropyjig::issue::decode(
-            &fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap(),
-        )
-        .unwrap();
+        let i =
+            jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap())
+                .unwrap();
         i.defer_until.clone().unwrap()
     };
     assert_eq!(today, "2999-01-01");
@@ -385,8 +382,8 @@ fn review_rounds_close_reopen() {
     ok(&d, &["review", &id, "--summary", "round one"]);
     ok(&d, &["rework", &id, "--reason", "fix tests"]);
     let text = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
-    let i = entropyjig::issue::decode(&text).unwrap();
-    assert_eq!(i.status, entropyjig::issue::Status::Claimed);
+    let i = jig::issue::decode(&text).unwrap();
+    assert_eq!(i.status, jig::issue::Status::Claimed);
     assert_eq!(i.assignee.as_deref(), Some("agent"));
     assert!(i.claim_id.is_some());
     ok(&d, &["review", &id, "--summary", "round two"]);
@@ -403,7 +400,7 @@ fn review_rounds_close_reopen() {
     );
     let path = d.join(format!(".jig/closed/{id}.md"));
     let text = fs::read_to_string(&path).unwrap();
-    let i = entropyjig::issue::decode(&text).unwrap();
+    let i = jig::issue::decode(&text).unwrap();
     assert_eq!(i.closing_summary.as_deref(), Some("all good"));
     assert!(i.body.contains("the description"));
     assert_eq!(i.assignee.as_deref(), Some("agent"));
@@ -423,8 +420,8 @@ fn review_rounds_close_reopen() {
     ok(&d, &["note", &id, "audit trail"]);
     ok(&d, &["reopen", &id, "--reason", "regression"]);
     let path = d.join(format!(".jig/open/{id}.md"));
-    let i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(i.status, entropyjig::issue::Status::Open);
+    let i = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(i.status, jig::issue::Status::Open);
     assert!(i.closing_summary.is_none());
     assert!(i.history.contains("all good"));
     assert!(i.notes.contains("audit trail"));
@@ -496,10 +493,8 @@ fn notes_bounds() {
     assert!(e.contains("single line"), "{e}");
     let e = bad(&d, &["note", &id, ""]);
     assert!(e.contains("empty"), "{e}");
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+        .unwrap();
     assert!(i.notes.contains(&long));
     assert!(i.notes.contains("qa:"));
 }
@@ -513,16 +508,12 @@ fn body_modes_and_update() {
         .to_string();
     let o = run_stdin(&d, &["update", &id, "--body", "-"], "piped\nbody\n");
     assert!(o.status.success());
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+        .unwrap();
     assert_eq!(i.body, "piped\nbody\n", "body bytes preserved exactly");
     ok(&d, &["update", &id, "--title", "retitled"]);
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+        .unwrap();
     assert_eq!(i.title, "retitled");
     assert_eq!(i.body, "piped\nbody\n");
     bad(&d, &["update", &id]);
@@ -550,10 +541,9 @@ fn json_wire_and_no_leaks() {
     assert!(!sh.contains("claim_id"), "{sh}");
     let sh_h = ok(&d, &["show", &id]);
     assert!(sh_h.contains(marker));
-    let dec = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let dec =
+        jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+            .unwrap();
     assert_eq!(dec.title, "t \"dq\" pol");
 }
 
@@ -672,7 +662,7 @@ fn codec_domain() {
         .trim()
         .to_string();
     let text = fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap();
-    let i = entropyjig::issue::decode(&text).unwrap();
+    let i = jig::issue::decode(&text).unwrap();
     assert_eq!(
         i.body, body,
         "fenced and blockquoted reserved headings stay body"
@@ -681,7 +671,7 @@ fn codec_domain() {
     let path = d.join(format!(".jig/open/{id}.md"));
     let plain = text.replace("title: \"t\"", "title: plain #tag");
     fs::write(&path, &plain).unwrap();
-    let e = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
+    let e = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
     assert!(e.contains("title"), "plain scalar must name the field: {e}");
     for (field, value) in [
         ("title", "'x'"),
@@ -701,7 +691,7 @@ fn codec_domain() {
             .unwrap();
         let replaced = text.replacen(raw, &format!("{field}: {value}"), 1);
         fs::write(&path, &replaced).unwrap();
-        let e = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
+        let e = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
         assert!(
             e.contains(field),
             "{field}: {value} must name the field, got {e}"
@@ -710,7 +700,7 @@ fn codec_domain() {
     }
     let depends = text.replace("depends_on: []", "depends_on: [B1]");
     fs::write(&path, &depends).unwrap();
-    let e = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
+    let e = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap_err();
     assert!(
         e.contains("depends_on"),
         "bare list element must name the field: {e}"
@@ -719,7 +709,7 @@ fn codec_domain() {
 
     let escaped = text.replace("title: \"t\"", "title: \"a\\u0142b\"");
     fs::write(&path, &escaped).unwrap();
-    let i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(i.title, "a\u{0142}b");
     fs::write(&path, &text).unwrap();
 
@@ -741,25 +731,22 @@ fn codec_domain() {
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(d.join(".jig/open/B440.2.md"), &legacy).unwrap();
-    let i = entropyjig::issue::decode(&fs::read_to_string(d.join(".jig/open/B440.2.md")).unwrap())
-        .unwrap();
+    let i =
+        jig::issue::decode(&fs::read_to_string(d.join(".jig/open/B440.2.md")).unwrap()).unwrap();
     assert_eq!(i.id, "B440.2");
     assert_eq!(i.priority, None);
     assert_eq!(i.created_at.as_deref(), Some("2020-05-04"));
 
-    assert!(entropyjig::issue::valid_id("B-abcdef"));
-    assert!(entropyjig::issue::valid_id("B-abcdef.2.10"));
-    assert!(entropyjig::issue::valid_id("B440"));
-    assert!(!entropyjig::issue::valid_id("B-abcdef.0"));
-    assert!(!entropyjig::issue::valid_id("B-abcdef.02"));
-    assert!(!entropyjig::issue::valid_id("abcdef"));
-    assert!(!entropyjig::issue::valid_id("B-ABC123"));
+    assert!(jig::issue::valid_id("B-abcdef"));
+    assert!(jig::issue::valid_id("B-abcdef.2.10"));
+    assert!(jig::issue::valid_id("B440"));
+    assert!(!jig::issue::valid_id("B-abcdef.0"));
+    assert!(!jig::issue::valid_id("B-abcdef.02"));
+    assert!(!jig::issue::valid_id("abcdef"));
+    assert!(!jig::issue::valid_id("B-ABC123"));
+    assert_eq!(jig::issue::id_alias("abcdef").as_deref(), Some("B-abcdef"));
     assert_eq!(
-        entropyjig::issue::id_alias("abcdef").as_deref(),
-        Some("B-abcdef")
-    );
-    assert_eq!(
-        entropyjig::issue::id_alias("abcdef.2").as_deref(),
+        jig::issue::id_alias("abcdef.2").as_deref(),
         Some("B-abcdef.2")
     );
 }
@@ -773,10 +760,8 @@ fn body_exact_preservation() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let id = String::from_utf8(o.stdout).unwrap().trim().to_string();
     let read = |dirn: &str| {
-        entropyjig::issue::decode(
-            &fs::read_to_string(d.join(format!(".jig/{dirn}/{id}.md"))).unwrap(),
-        )
-        .unwrap()
+        jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/{dirn}/{id}.md"))).unwrap())
+            .unwrap()
     };
     assert_eq!(read("open").body, body, "add preserves body bytes");
     ok(&d, &["update", &id, "--title", "t2"]);
@@ -838,10 +823,8 @@ fn stdin_body_does_not_hold_lock() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+        .unwrap();
     assert_eq!(i.body, "fresh body");
 }
 
@@ -858,10 +841,8 @@ fn add_dep_many_preserves_order() {
     )
     .trim()
     .to_string();
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+        .unwrap();
     assert_eq!(i.depends_on, vec![a.clone(), b.clone(), c]);
     let e = bad(&d, &["add", "x", "--dep", &a, &a]);
     assert!(e.contains("duplicate"), "{e}");
@@ -1011,11 +992,11 @@ fn reopen_archives_summary_verbatim() {
         &["close", &id, "--reason", "done", "--summary", summary],
     );
     let closed = d.join(format!(".jig/closed/{id}.md"));
-    let i = entropyjig::issue::decode(&fs::read_to_string(&closed).unwrap()).unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(&closed).unwrap()).unwrap();
     assert_eq!(i.closing_summary.as_deref(), Some(summary));
     ok(&d, &["reopen", &id, "--reason", "regression"]);
     let open = d.join(format!(".jig/open/{id}.md"));
-    let i = entropyjig::issue::decode(&fs::read_to_string(&open).unwrap()).unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(&open).unwrap()).unwrap();
     assert!(i.closing_summary.is_none());
     let tail = i
         .history
@@ -1109,8 +1090,8 @@ fn init_installs_agent_integrations_idempotently() {
     assert_eq!(ok(&proj, &["init"]), "initialized .jig/\n");
     let agents = fs::read_to_string(proj.join("AGENTS.md")).unwrap();
     assert!(agents.starts_with(agents_orig), "original bytes preserved");
-    assert_eq!(agents.matches("<!-- BEGIN ENTROPYJIG -->").count(), 1);
-    assert_eq!(agents.matches("<!-- END ENTROPYJIG -->").count(), 1);
+    assert_eq!(agents.matches("<!-- BEGIN JIG v:1 hash:").count(), 1);
+    assert_eq!(agents.matches("<!-- END JIG -->").count(), 1);
     assert!(agents.contains("jig claim ID") && agents.contains("jig recall"));
 
     let claude: Value =
@@ -1382,7 +1363,7 @@ fn lifecycle_transition_matrix() {
                     let out = ok(&d, &args);
                     assert!(!out.is_empty());
                     let dir_after = if *to == "closed" { "closed" } else { "open" };
-                    let i = entropyjig::issue::decode(
+                    let i = jig::issue::decode(
                         &fs::read_to_string(d.join(format!(".jig/{dir_after}/{id}.md"))).unwrap(),
                     )
                     .unwrap();
@@ -1436,13 +1417,13 @@ fn proposals_are_not_work_and_do_not_cascade() {
         .to_string();
     let read_status = |id: &str| {
         let name = format!(".jig/open/{id}.md");
-        entropyjig::issue::decode(&fs::read_to_string(d.join(name)).unwrap())
+        jig::issue::decode(&fs::read_to_string(d.join(name)).unwrap())
             .unwrap()
             .status
     };
-    assert_eq!(read_status(&p), entropyjig::issue::Status::Proposed);
-    assert_eq!(read_status(&c), entropyjig::issue::Status::Proposed);
-    assert_eq!(read_status(&pc), entropyjig::issue::Status::Open);
+    assert_eq!(read_status(&p), jig::issue::Status::Proposed);
+    assert_eq!(read_status(&c), jig::issue::Status::Proposed);
+    assert_eq!(read_status(&pc), jig::issue::Status::Open);
 
     let r = ok(&d, &["ready"]);
     let ready_ids: Vec<&str> = r
@@ -1461,24 +1442,20 @@ fn proposals_are_not_work_and_do_not_cascade() {
     assert!(e.contains("approval"), "{e}");
 
     ok(&d, &["approve", &p]);
-    assert_eq!(read_status(&p), entropyjig::issue::Status::Open);
+    assert_eq!(read_status(&p), jig::issue::Status::Open);
     assert_eq!(
         read_status(&c),
-        entropyjig::issue::Status::Proposed,
+        jig::issue::Status::Proposed,
         "approve must not cascade to children"
     );
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap())
+        .unwrap();
     assert!(i.history.ends_with("approved"), "{:?}", i.history);
 
     ok(&d, &["revise", &p, "--reason", "scope unclear"]);
-    assert_eq!(read_status(&p), entropyjig::issue::Status::Proposed);
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap(),
-    )
-    .unwrap();
+    assert_eq!(read_status(&p), jig::issue::Status::Proposed);
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{p}.md"))).unwrap())
+        .unwrap();
     assert!(i.history.ends_with("revised: scope unclear"));
 
     let w = add(&d, "w");
@@ -1487,10 +1464,8 @@ fn proposals_are_not_work_and_do_not_cascade() {
     let e = bad(&d, &["claim", &w]);
     assert!(e.contains("blocked"), "{e}");
     ok(&d, &["claim", &w, "--force", "--by", "agent"]);
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{w}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{w}.md"))).unwrap())
+        .unwrap();
     assert!(i.history.contains(&format!("bypassing {b}")));
 }
 
@@ -1513,14 +1488,12 @@ fn force_bypasses_every_unfinished_blocker_status() {
     let e = bad(&d, &["claim", &w]);
     assert!(e.contains("blocked"), "{e}");
     ok(&d, &["claim", &w, "--force"]);
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{w}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{w}.md"))).unwrap())
+        .unwrap();
     for bid in ["B-f00000", "B-f00001", "B-f00002"] {
         assert!(i.history.contains(bid), "{:?}", i.history);
     }
-    assert_eq!(i.status, entropyjig::issue::Status::Claimed);
+    assert_eq!(i.status, jig::issue::Status::Claimed);
 }
 
 #[test]
@@ -1586,11 +1559,9 @@ fn structural_and_marker_roundtrip() {
     let d = dir("roundtrip");
     ok(&d, &["init", "--no-hooks"]);
     let read_body = |id: &str| {
-        entropyjig::issue::decode(
-            &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-        )
-        .unwrap()
-        .body
+        jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+            .unwrap()
+            .body
     };
     let accepted: &[&str] = &[
         "conflict quoted in fence\n\n```\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch\n```\n",
@@ -1654,8 +1625,8 @@ fn multiline_reasons_and_summaries() {
     assert_eq!(fs::read_to_string(&path).unwrap(), before);
 
     ok(&d, &["revise", &id, "--reason", reason]);
-    i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(i.status, entropyjig::issue::Status::Proposed);
+    i = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(i.status, jig::issue::Status::Proposed);
     let tail = i
         .history
         .split("\n  > ")
@@ -1668,7 +1639,7 @@ fn multiline_reasons_and_summaries() {
     ok(&d, &["claim", &id]);
     let summary = "line one\n\n```text\nfenced\n```";
     ok(&d, &["review", &id, "--summary", summary]);
-    i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    i = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
     let part = i
         .history
         .split("\n  summary:\n")
@@ -1682,7 +1653,7 @@ fn multiline_reasons_and_summaries() {
     assert_eq!(recovered, summary);
 
     ok(&d, &["rework", &id, "--reason", "more\nlines"]);
-    i = entropyjig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
+    i = jig::issue::decode(&fs::read_to_string(&path).unwrap()).unwrap();
     assert!(i.history.contains("rework requested:\n  > more\n  > lines"));
 
     ok(
@@ -1690,7 +1661,7 @@ fn multiline_reasons_and_summaries() {
         &["close", &id, "--reason", reason, "--summary", summary],
     );
     let closed_path = d.join(format!(".jig/closed/{id}.md"));
-    i = entropyjig::issue::decode(&fs::read_to_string(&closed_path).unwrap()).unwrap();
+    i = jig::issue::decode(&fs::read_to_string(&closed_path).unwrap()).unwrap();
     assert_eq!(i.closing_summary.as_deref(), Some(summary));
     let part = i
         .history
@@ -1724,10 +1695,9 @@ fn option_parsing_edges() {
         let id = ok(&d, &["add", &format!("p{n}"), "-p", v, "--approved"])
             .trim()
             .to_string();
-        let i = entropyjig::issue::decode(
-            &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-        )
-        .unwrap();
+        let i =
+            jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+                .unwrap();
         assert_eq!(i.priority, Some(v.parse::<u8>().unwrap()));
     }
     let id = add(&d, "u");
@@ -1755,7 +1725,7 @@ fn note_rejects_separators_and_control() {
         before,
         "refused notes write nothing"
     );
-    let i = entropyjig::issue::decode(&fs::read_to_string(&file).unwrap()).unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(&file).unwrap()).unwrap();
     assert!(i.notes.is_empty());
 }
 
@@ -1882,7 +1852,10 @@ fn check_reports_every_problem_without_changes() {
         let path = p["path"].as_str().unwrap();
         let problem = p["problem"].as_str().unwrap();
         let hint = p["hint"].as_str().unwrap();
-        assert!(path.starts_with(".jig/"), "bad path {path:?} in {stdout}");
+        assert!(
+            path.starts_with(".jig/") || path == "AGENTS.md",
+            "bad path {path:?} in {stdout}"
+        );
         assert!(!PathBuf::from(path).is_absolute(), "absolute {path:?}");
         assert!(
             !problem.contains(&abs),
@@ -1940,6 +1913,7 @@ fn check_reports_every_problem_without_changes() {
     assert!(has(".jig/memory.md", "memory.md"), "{stdout}");
     assert!(has(".jig/.gitignore", "legacy"), "{stdout}");
     assert!(has(".jig/.move", ""), "{stdout}");
+    assert!(has("AGENTS.md", "missing"), "{stdout}");
     assert_eq!(tree_bytes(&jig), before, "check must not change .jig");
     assert!(!jig.join(".lock").exists(), "check must not create .lock");
 }
@@ -1979,7 +1953,9 @@ fn tmp_ignore_rule_covers_nested_files() {
 #[test]
 fn check_pending_move_then_read_recovers() {
     let d = dir("checkmove");
-    let jig = seed_bare_registry(&d);
+    ok(&d, &["init", "--no-hooks"]);
+    let jig = d.join(".jig");
+    fs::remove_file(jig.join(".lock")).unwrap();
     let old = fm("B-0ff002", "open", "");
     let new = fm("B-0ff002", "closed", "");
     fs::write(jig.join("open/B-0ff002.md"), &old).unwrap();
@@ -2037,20 +2013,22 @@ fn ready_warns_once_per_broken_reference() {
     assert_eq!(rows[0]["id"].as_str().unwrap(), good);
     let warn = String::from_utf8_lossy(&o.stderr);
     let refs: Vec<_> = warn.lines().filter(|l| l.contains("unresolved")).collect();
-    assert_eq!(refs.len(), 3, "{warn}");
+    assert_eq!(refs.len(), 2, "{warn}");
     assert!(
         warn.lines().filter(|l| l.contains("B-bad0f0.md")).count() == 1,
-        "one file warning for the malformed record: {warn}"
+        "one file warning for the inconsistent record: {warn}"
     );
     assert!(
-        warn.contains("B-de0002") && warn.contains("B-de0001") && warn.contains("B-ca0000.1"),
+        warn.contains("B-de0001") && warn.contains("B-ca0000.1"),
         "{warn}"
     );
-    let e = bad(&d, &["claim", "B-de0002", "--force"]);
+    let e = bad(&d, &["claim", "B-de0002"]);
     assert!(
-        e.contains("B-bad0f0"),
-        "no force bypass of unusable refs: {e}"
+        e.contains("blocked") && e.contains("B-bad0f0"),
+        "inconsistent blocker is an ordinary blocker: {e}"
     );
+    let out = ok(&d, &["claim", "B-de0002", "--force"]);
+    assert!(out.contains("B-de0002"), "{out}");
 }
 
 #[cfg(unix)]
@@ -2391,7 +2369,7 @@ fn seeded_body_variations_roundtrip_or_refuse() {
         assert_eq!(before, orig);
         if accept {
             ok(&d, &["update", &id, "--body", &body]);
-            let i = entropyjig::issue::decode(&fs::read_to_string(&file).unwrap()).unwrap();
+            let i = jig::issue::decode(&fs::read_to_string(&file).unwrap()).unwrap();
             assert_eq!(i.body, body, "case {case} body must round-trip exactly");
         } else {
             let e = bad(&d, &["update", &id, "--body", &body]);
@@ -2442,10 +2420,8 @@ fn reopen_multiline_reason_and_defer_today() {
     let id = add(&d, "ml");
     ok(&d, &["close", &id, "--reason", "closed\nfor cleanup"]);
     ok(&d, &["reopen", &id, "--reason", "first line\nsecond line"]);
-    let i = entropyjig::issue::decode(
-        &fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{id}.md"))).unwrap())
+        .unwrap();
     assert!(
         i.history
             .ends_with("reopened:\n  > first line\n  > second line"),
@@ -2453,7 +2429,7 @@ fn reopen_multiline_reason_and_defer_today() {
         i.history
     );
 
-    let today = entropyjig::clock::today();
+    let today = jig::clock::today();
     let id2 = add(&d, "defer me");
     ok(&d, &["defer", &id2, "--until", &today]);
     let out = ok(&d, &["ready"]);
@@ -2620,6 +2596,10 @@ fn generated_add_title_cases() {
     }
     assert!(ok_n > 0 && bad_n > 0, "add title ok={ok_n} bad={bad_n}");
     assert!(ok_n + bad_n >= 100);
+    assert!(
+        d.join("xdg/jig/install-id").is_file(),
+        "install salt must live under XDG_STATE_HOME/jig"
+    );
     assert_eq!(ok(&d, &["check", "--json"]).trim(), "[]");
 }
 
@@ -3036,8 +3016,7 @@ fn list_tree_tolerate_bad_files_and_reattach_orphans() {
     let other = add(&d, "other");
 
     let mid_file = d.join(format!(".jig/open/{mid}.md"));
-    let text = fs::read_to_string(&mid_file).unwrap();
-    fs::write(&mid_file, text.replace("assignee: null", "assignee: \"x\"")).unwrap();
+    fs::write(&mid_file, "not an issue").unwrap();
     fs::write(d.join(".jig/open/B-dead00.md"), "not an issue").unwrap();
 
     let o = run(&d, &["tree", &p]);
@@ -3099,9 +3078,9 @@ fn list_tree_tolerate_bad_files_and_reattach_orphans() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("jig check"));
 
     let e = bad(&d, &["tree", &mid]);
-    assert!(e.contains("inconsistent") || e.contains("unusable"), "{e}");
+    assert!(e.contains(&mid), "{e}");
     let e = bad(&d, &["show", &mid]);
-    assert!(e.contains("inconsistent") || e.contains("unusable"), "{e}");
+    assert!(e.contains(&mid), "{e}");
     let t = ok(&d, &["tree", &other]);
     assert!(t.contains(&format!("{other} open other")), "{t}");
 }
@@ -3300,5 +3279,430 @@ fn read_lists_skip_each_bad_file_once() {
                 "{kind} conflict cause missing: {stdout}"
             );
         }
+    }
+}
+
+fn fnv1a(text: &str) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in text.replace("\r\n", "\n").bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+#[test]
+fn agent_instruction_block_states_preserve_outside_bytes() {
+    let base = dir("agcanon");
+    ok(&base, &["init", "--no-hooks"]);
+    let written = fs::read_to_string(base.join("AGENTS.md")).unwrap();
+    let start = written.find("<!-- BEGIN JIG v:1 hash:").unwrap();
+    let stop = written.find("<!-- END JIG -->").unwrap() + "<!-- END JIG -->".len();
+    let canonical = written[start..stop].to_string();
+    let body =
+        &canonical[canonical.find('\n').unwrap() + 1..canonical.rfind("<!-- END JIG -->").unwrap()];
+    assert!(
+        canonical.contains(&format!("hash:{:016x}", fnv1a(body))),
+        "fresh block hash must cover the normalized body: {canonical}"
+    );
+
+    for nl in ["\n", "\r\n"] {
+        let canon = canonical.replace('\n', nl);
+        let pre = format!("pre-marker text{nl}{nl}");
+        let post = format!("{nl}post-marker text{nl}");
+
+        let fixture = |name: &str, agents: String| -> TestDir {
+            let d = dir(name);
+            ok(&d, &["init", "--no-hooks"]);
+            fs::write(d.join("AGENTS.md"), agents).unwrap();
+            d
+        };
+        let check_unchanged = |d: &Path, code: i32| -> String {
+            let agents = fs::read(d.join("AGENTS.md")).unwrap();
+            let tree = tree_bytes(&d.join(".jig"));
+            let o = run(d, &["check"]);
+            assert_eq!(o.status.code(), Some(code));
+            assert_eq!(fs::read(d.join("AGENTS.md")).unwrap(), agents);
+            assert_eq!(tree_bytes(&d.join(".jig")), tree);
+            String::from_utf8(o.stdout).unwrap()
+        };
+
+        // missing block: check reports, init appends without touching prior bytes
+        let d = fixture("ag-miss", format!("{pre}custom rules{nl}"));
+        let out = check_unchanged(&d, 1);
+        assert!(
+            out.contains("AGENTS.md: Jig instructions are missing"),
+            "{out}"
+        );
+        assert!(out.contains("run `jig init`"), "{out}");
+        let old = fs::read_to_string(d.join("AGENTS.md")).unwrap();
+        let out = ok(&d, &["init", "--no-hooks"]);
+        assert!(!out.contains("customized"), "{out}");
+        let new = fs::read_to_string(d.join("AGENTS.md")).unwrap();
+        assert_eq!(new, format!("{old}{nl}{canon}{nl}"), "append: {new}");
+
+        // current intact: clean check, init is a no-op
+        let file = format!("{pre}{canon}{post}");
+        let d = fixture("ag-cur", file.clone());
+        let out = check_unchanged(&d, 0);
+        assert!(out.contains("clean"), "{out}");
+        ok(&d, &["init", "--no-hooks"]);
+        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+
+        // older intact: check reports outdated, init upgrades surgically
+        let older = canon.replace("<!-- BEGIN JIG v:1 ", "<!-- BEGIN JIG v:0 ");
+        let d = fixture("ag-old", format!("{pre}{older}"));
+        let out = check_unchanged(&d, 1);
+        assert!(out.contains("Jig instructions are outdated"), "{out}");
+        let out = ok(&d, &["init", "--no-hooks"]);
+        assert!(!out.contains("customized"), "{out}");
+        assert_eq!(
+            fs::read_to_string(d.join("AGENTS.md")).unwrap(),
+            format!("{pre}{canon}"),
+            "upgrade must preserve outside bytes and the file ending at END"
+        );
+        let out = check_unchanged(&d, 0);
+        assert!(out.contains("clean"), "{out}");
+        let before = fs::read(d.join("AGENTS.md")).unwrap();
+        ok(&d, &["init", "--no-hooks"]);
+        assert_eq!(
+            fs::read(d.join("AGENTS.md")).unwrap(),
+            before,
+            "re-init idempotent"
+        );
+
+        // older intact with genuinely different body but its own valid hash
+        let old_body = format!("## Issue tracking with Jig{nl}{nl}old rules{nl}");
+        let older2 = format!(
+            "<!-- BEGIN JIG v:0 hash:{:016x} -->{nl}{old_body}<!-- END JIG -->",
+            fnv1a(&old_body)
+        );
+        let d = fixture("ag-old2", format!("{pre}{older2}{post}"));
+        let out = check_unchanged(&d, 1);
+        assert!(out.contains("Jig instructions are outdated"), "{out}");
+        assert!(!out.contains("customized"), "{out}");
+        ok(&d, &["init", "--no-hooks"]);
+        assert_eq!(
+            fs::read_to_string(d.join("AGENTS.md")).unwrap(),
+            format!("{pre}{canon}{post}")
+        );
+
+        // current customized: not a problem, init reports and leaves bytes
+        let custom = canon.replace(
+            "<!-- END JIG -->",
+            &format!("- our local rule{nl}<!-- END JIG -->"),
+        );
+        let file = format!("{pre}{custom}{post}");
+        let d = fixture("ag-ccu", file.clone());
+        let out = check_unchanged(&d, 0);
+        assert!(out.contains("clean"), "{out}");
+        let out = ok(&d, &["init", "--no-hooks"]);
+        assert!(
+            out.contains("AGENTS.md: Jig instructions are customized; left unchanged"),
+            "{out}"
+        );
+        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+
+        // older customized: check reports it, init leaves bytes and reports
+        let custom_old = older.replace(
+            "<!-- END JIG -->",
+            &format!("- our local rule{nl}<!-- END JIG -->"),
+        );
+        let file = format!("{pre}{custom_old}{post}");
+        let d = fixture("ag-ocu", file.clone());
+        let out = check_unchanged(&d, 1);
+        assert!(
+            out.contains("customized Jig instructions are outdated"),
+            "{out}"
+        );
+        assert!(out.contains("reapply"), "{out}");
+        let out = ok(&d, &["init", "--no-hooks"]);
+        assert!(out.contains("customized"), "{out}");
+        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+
+        // newer version: check reports unsupported, init never downgrades
+        let newer = canon.replace("<!-- BEGIN JIG v:1 ", "<!-- BEGIN JIG v:2 ");
+        let file = format!("{pre}{newer}{post}");
+        let d = fixture("ag-new", file.clone());
+        let out = check_unchanged(&d, 1);
+        assert!(out.contains("version 2") && out.contains("newer"), "{out}");
+        let out = ok(&d, &["init", "--no-hooks"]);
+        assert!(!out.contains("customized"), "{out}");
+        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+
+        // malformed and duplicated markers: check reports, init refuses
+        for (name, file) in [
+            (
+                "ag-mal",
+                format!("{pre}<!-- BEGIN JIG v:1 -->{nl}body{nl}<!-- END JIG -->{nl}"),
+            ),
+            ("ag-dup", format!("{pre}{canon}{nl}{canon}{nl}")),
+            ("ag-ind", format!("{pre}  {canon}{nl}")),
+        ] {
+            let d = fixture(name, file.clone());
+            let out = check_unchanged(&d, 1);
+            assert!(
+                out.contains("malformed or duplicated Jig instruction markers"),
+                "{name}: {out}"
+            );
+            let e = bad(&d, &["init", "--no-hooks"]);
+            assert!(e.contains("malformed or duplicated"), "{name}: {e}");
+            assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+        }
+    }
+}
+
+#[test]
+fn agent_block_and_start_cover_workflow_rules_in_order() {
+    let d = dir("agentrules");
+    ok(&d, &["init", "--no-hooks"]);
+    let agents = fs::read_to_string(d.join("AGENTS.md")).unwrap();
+    let block = &agents[agents.find("<!-- BEGIN JIG").unwrap()..];
+    let text = ok(&d, &["start"]);
+    let json: Value = serde_json::from_str(&ok(&d, &["start", "--json"])).unwrap();
+    let hook: Value = serde_json::from_str(&ok(&d, &["start", "--hook-json"])).unwrap();
+    let workflow = json["workflow"].as_str().unwrap();
+    assert_eq!(format!("{workflow}\n"), text);
+    assert_eq!(
+        hook["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap(),
+        workflow
+    );
+    let tokens = [
+        "Jig workflow",
+        "tracks work with `jig`",
+        "Do not keep task lists",
+        "cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v1.0.0",
+        "https://github.com/EntropyLogix/Jig",
+        "jig start` for the workflow",
+        "jig ready` lists approved, unblocked work",
+        "jig show ID` reads one issue",
+        "authorizes only its described scope",
+        "jig claim ID --by NAME",
+        "your agent name",
+        "jig review ID --summary TEXT",
+        "for people unless a person explicitly tells you otherwise",
+        "jig add TITLE --body TEXT",
+        "jig note ID TEXT",
+        "jig unclaim ID",
+        "jig recall [TOPIC]",
+        "jig remember TOPIC TEXT",
+        "your own memory",
+        "jig check` and report to a person",
+    ];
+    for hay in [
+        workflow,
+        block.strip_prefix("<!-- BEGIN JIG").unwrap_or(block),
+    ] {
+        let mut at = 0;
+        for token in tokens.iter().skip(if hay.starts_with("Jig workflow") {
+            0
+        } else {
+            1
+        }) {
+            let i = hay[at..]
+                .find(token)
+                .unwrap_or_else(|| panic!("{token:?} missing at {at} in {hay:?}"));
+            at += i + token.len();
+        }
+        for gone in [
+            ["Entro", "pyJig"].concat(),
+            ["ENTROPY", "JIG"].concat(),
+            "not approval to implement a contract".to_string(),
+            "Readiness is not approval".to_string(),
+        ] {
+            assert!(!hay.contains(&gone), "{gone} leaked into {hay}");
+        }
+    }
+}
+
+#[test]
+fn inconsistent_fields_are_readable_but_not_writable_or_claimable() {
+    for (kind, patch) in [
+        (
+            "assignee",
+            fm("X", "open", "").replace("assignee: null", "assignee: \"x\""),
+        ),
+        (
+            "claim_id",
+            fm("X", "open", "").replace("claim_id: null", "claim_id: \"c\""),
+        ),
+        (
+            "no_claim_id",
+            fm("X", "claimed", "").replace("assignee: null", "assignee: \"bot\""),
+        ),
+        (
+            "closed_at",
+            fm("X", "open", "").replace("closed_at: null", "closed_at: \"2026-01-01\""),
+        ),
+        (
+            "closing_summary",
+            fm("X", "open", "")
+                .replace("## History\n", "## Closing Summary\n\n> s\n\n## History\n"),
+        ),
+    ] {
+        let d = dir("incon");
+        ok(&d, &["init", "--no-hooks"]);
+        let root = "B-a00000";
+        let target = "B-a00000.1";
+        let child = "B-a00000.1.1";
+        let dep = "B-de0000";
+        fs::write(d.join(".jig/open/B-a00000.md"), fm(root, "open", "")).unwrap();
+        let target_text = patch
+            .replace("id: \"X\"", &format!("id: \"{target}\""))
+            .replace("title: \"T X\"", &format!("title: \"T {target}\""))
+            .replace("parent: null", &format!("parent: \"{root}\""));
+        fs::write(d.join(format!(".jig/open/{target}.md")), &target_text).unwrap();
+        fs::write(
+            d.join(format!(".jig/open/{child}.md")),
+            fm(child, "open", "").replace("parent: null", &format!("parent: \"{target}\"")),
+        )
+        .unwrap();
+        fs::write(
+            d.join(format!(".jig/open/{dep}.md")),
+            fm(dep, "open", "").replace("depends_on: []", &format!("depends_on: [\"{target}\"]")),
+        )
+        .unwrap();
+        let path = format!(".jig/open/{target}.md");
+
+        // readable: list, list --json, tree, show all include the record
+        for args in [
+            vec!["list"],
+            vec!["list", "--json"],
+            vec!["tree", root],
+            vec!["tree", target],
+        ] {
+            let o = run(&d, &args);
+            assert!(o.status.success(), "{kind} {args:?}");
+            let stdout = String::from_utf8(o.stdout).unwrap();
+            let (want_t, want_c) = if args.contains(&"--json") {
+                (
+                    format!("\"id\":\"{target}\""),
+                    format!("\"id\":\"{child}\""),
+                )
+            } else {
+                (format!("{target} "), format!("{child} "))
+            };
+            assert!(stdout.contains(&want_t), "{kind} {args:?}: {stdout}");
+            assert!(stdout.contains(&want_c), "{kind} {args:?}: {stdout}");
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let line = format!("{path}: ");
+            assert!(
+                stderr
+                    .lines()
+                    .any(|l| l.contains(&line) && l.contains("jig check")),
+                "{kind} {args:?} must warn about {path} without skipping it: {stderr}"
+            );
+            assert!(
+                !stderr.contains(&format!("skipping {path}")),
+                "{kind} {args:?} record is listed, not skipped: {stderr}"
+            );
+        }
+        let show: Value = serde_json::from_str(&ok(&d, &["show", target, "--json"])).unwrap();
+        match kind {
+            "assignee" => assert_eq!(show["assignee"], "x", "{kind}"),
+            "claim_id" => {
+                assert!(
+                    ok(&d, &["show", target]).contains("claim_id: \"c\""),
+                    "{kind}"
+                )
+            }
+            "no_claim_id" => {
+                assert_eq!(show["status"], "claimed", "{kind}");
+                assert!(show.get("claim_id").is_none(), "{kind}");
+                assert!(
+                    ok(&d, &["show", target]).contains("claim_id: null"),
+                    "{kind}"
+                );
+            }
+            "closed_at" => assert_eq!(show["closed_at"], "2026-01-01", "{kind}"),
+            "closing_summary" => assert_eq!(show["closing_summary"], "s", "{kind}"),
+            _ => unreachable!(),
+        }
+
+        // not claimable, not in ready; dependents behave as with an ordinary blocker
+        let o = run(&d, &["ready"]);
+        assert!(o.status.success());
+        let stdout = String::from_utf8(o.stdout).unwrap();
+        assert!(
+            !stdout.contains(&format!("{target} ")),
+            "{kind} ready: {stdout}"
+        );
+        assert!(
+            stdout.contains(&format!("{child} ")),
+            "{kind} ready child: {stdout}"
+        );
+        assert!(!stdout.contains(dep), "{kind} ready dep: {stdout}");
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            stderr
+                .lines()
+                .any(|l| l.contains(&format!("skipping {path}"))),
+            "{kind} ready must skip {path} with a warning: {stderr}"
+        );
+        for args in [
+            vec!["claim", target],
+            vec!["claim", target, "--force"],
+            vec!["update", target, "--title", "x"],
+            vec!["close", target, "--reason", "r"],
+        ] {
+            let e = bad(&d, &args);
+            assert!(
+                e.contains(target) && (e.contains("jig check") || e.contains("issue")),
+                "{kind} {args:?}: {e}"
+            );
+        }
+        if kind == "no_claim_id" {
+            let e = bad(&d, &["unclaim", target]);
+            assert!(e.contains("jig check"), "{kind} unclaim: {e}");
+        }
+        let before = tree_bytes(&d.join(".jig"));
+        let e = bad(&d, &["claim", dep]);
+        assert!(
+            e.contains("blocked") && e.contains(target) && !e.contains("unresolved"),
+            "{kind} dep claim: {e}"
+        );
+        let out = ok(&d, &["claim", dep, "--force"]);
+        assert!(out.contains(dep), "{kind} {out}");
+        let after = tree_bytes(&d.join(".jig"));
+        let changed: Vec<_> = before
+            .iter()
+            .zip(after.iter())
+            .filter(|(a, b)| a != b)
+            .map(|(a, _)| a.0.clone())
+            .collect();
+        assert_eq!(
+            changed,
+            vec![format!("open/{dep}.md")],
+            "{kind} only the dependent may change: {changed:?}"
+        );
+
+        let o = run(&d, &["check", "--json"]);
+        let problems: Value = serde_json::from_str(&String::from_utf8(o.stdout).unwrap()).unwrap();
+        let at: Vec<_> = problems
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["path"].as_str() == Some(path.as_str()))
+            .collect();
+        assert_eq!(at.len(), 1, "{kind} check problems for {path}: {problems}");
+        let problem = at[0]["problem"].as_str().unwrap();
+        let needle = match kind {
+            "assignee" => "assignee",
+            "claim_id" => "claim_id",
+            "no_claim_id" => "claim_id",
+            "closed_at" => "closed_at",
+            "closing_summary" => "closing summary",
+            _ => unreachable!(),
+        };
+        assert!(problem.contains(needle), "{kind}: {problem}");
+        assert!(
+            !problems
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["problem"].as_str().unwrap().contains("unresolved")),
+            "{kind} no unresolved references: {problems}"
+        );
     }
 }

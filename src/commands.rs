@@ -2,6 +2,7 @@ use crate::check;
 use crate::clock;
 use crate::domain::{self, Action};
 use crate::ident;
+use crate::instructions;
 use crate::integration;
 use crate::issue::{self, Issue, Status};
 use crate::memory;
@@ -32,24 +33,7 @@ fn usage(msg: impl Into<String>) -> Fail {
     }
 }
 
-const WORKFLOW: &str = "EntropyJig workflow\n\
-1. `jig ready` lists unblocked open work; `jig show ID` reads one issue.\n\
-   `ready` output is a queue view, not approval to implement a contract.\n\
-2. `jig claim ID [--by NAME]` reserves it as claimed; work happens outside jig.\n\
-   `claim --force` bypasses only live blockers and only on a human's explicit\n\
-   instruction for that issue.\n\
-3. `jig review ID [--summary TEXT]` submits the work for verification;\n\
-   `jig rework ID --reason TEXT` returns it to claimed.\n\
-4. A human closes with `jig close ID --reason TEXT [--summary TEXT]`;\n\
-   `jig reopen ID --reason TEXT` moves it back to open.\n\
-5. `jig note ID TEXT [--by NAME]` annotates; `jig remember TOPIC TEXT` and\n\
-   `jig recall [TOPIC]` share project facts.\n\
-Agents create proposals with `jig add` without `--approved`. A proposal is not work.\n\
-Humans use `jig approve ID`, `jig revise ID --reason TEXT`, or `jig close`.\n\
-If `jig ready` warns, run `jig check` and report the result to a human; do not remove dependencies to get unblocked.\n\
-Issues are Markdown files under .jig/open and .jig/closed.";
-
-const HELP: &str = "jig - file-based issue tracker and project memory\n\
+const HELP: &str = "Jig - file-based issue tracker and project memory\n\
 \n\
 Usage: jig [--json] COMMAND [ARGS]\n\
 \n\
@@ -421,12 +405,16 @@ fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 0, "no positional arguments")?;
     let created = store::init(cwd).map_err(fail)?;
     let _lock = registry(cwd)?;
-    integration::install(cwd, !flag(&p, "no-hooks")).map_err(fail)?;
-    if created {
-        Ok("initialized .jig/\n".to_string())
+    let customized = integration::install(cwd, !flag(&p, "no-hooks")).map_err(fail)?;
+    let mut out = if created {
+        "initialized .jig/\n".to_string()
     } else {
-        Ok(".jig/ already initialized\n".to_string())
+        ".jig/ already initialized\n".to_string()
+    };
+    if customized {
+        out.push_str("AGENTS.md: Jig instructions are customized; left unchanged\n");
     }
+    Ok(out)
 }
 
 fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {
@@ -447,14 +435,15 @@ fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {
         store::discover(cwd).map_err(fail)?;
         return Ok(format!(
             "{{\"hookSpecificOutput\":{{\"hookEventName\":\"SessionStart\",\"additionalContext\":{}}}}}\n",
-            issue::esc(WORKFLOW)
+            issue::esc(instructions::WORKFLOW.trim_end_matches('\n'))
         ));
     }
     with_registry(cwd, |_jig| {
+        let workflow = instructions::WORKFLOW.trim_end_matches('\n');
         if json {
-            Ok(format!("{{\"workflow\":{}}}\n", issue::esc(WORKFLOW)))
+            Ok(format!("{{\"workflow\":{}}}\n", issue::esc(workflow)))
         } else {
-            Ok(format!("{WORKFLOW}\n"))
+            Ok(format!("{workflow}\n"))
         }
     })
 }
@@ -574,7 +563,11 @@ fn next_child(jig: &Path, parent: &str) -> R<String> {
     Ok(format!("{parent}.{next}"))
 }
 
-fn skipped_file_warnings(snap: &check::Snapshot, include: impl Fn(&Path) -> bool) -> Vec<String> {
+fn file_warnings(
+    snap: &check::Snapshot,
+    include: impl Fn(&Path) -> bool,
+    skip_inconsistent: bool,
+) -> Vec<String> {
     let mut warnings = Vec::new();
     let mut warned: HashSet<PathBuf> = HashSet::new();
     for problem in &snap.problems {
@@ -587,19 +580,18 @@ fn skipped_file_warnings(snap: &check::Snapshot, include: impl Fn(&Path) -> bool
             problem.problem
         ));
     }
+    let prefix = if skip_inconsistent { "skipping " } else { "" };
     for rec in &snap.records {
-        if rec.usable || !include(&rec.path) || warned.contains(&rec.path) {
+        if !include(&rec.path) || warned.contains(&rec.path) {
             continue;
         }
-        warned.insert(rec.path.clone());
-        let reason = domain::field_problems(&rec.issue)
-            .first()
-            .map(|(p, _)| *p)
-            .unwrap_or("unusable record");
-        warnings.push(format!(
-            "skipping {}: {reason}; run `jig check`",
-            rec.path.display()
-        ));
+        if let Some((problem, _)) = domain::field_problems(&rec.issue).first() {
+            warned.insert(rec.path.clone());
+            warnings.push(format!(
+                "{prefix}{}: {problem}; run `jig check`",
+                rec.path.display()
+            ));
+        }
     }
     warnings
 }
@@ -611,9 +603,12 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     with_registry(cwd, |jig| {
         let snap = check::scan(jig);
         let today = clock::today();
-        let mut warnings = skipped_file_warnings(&snap, |p| p.starts_with(".jig/open"));
+        let mut warnings = file_warnings(&snap, |p| p.starts_with(".jig/open"), true);
         let mut rows = Vec::new();
         for i in snap.issues() {
+            if !domain::field_problems(i).is_empty() {
+                continue;
+            }
             match domain::eligibility(i, &today, false, |id| snap.resolve(id)) {
                 Ok(_) => rows.push(i.clone()),
                 Err(domain::Ineligible::Reference(reference)) => warnings.push(format!(
@@ -805,7 +800,7 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         };
         Ok(CommandOutput {
             stdout,
-            warnings: skipped_file_warnings(&snap, |_| true),
+            warnings: file_warnings(&snap, |_| true, false),
             code: 0,
         })
     })
@@ -855,7 +850,7 @@ fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         };
         Ok(CommandOutput {
             stdout,
-            warnings: skipped_file_warnings(&snap, |_| true),
+            warnings: file_warnings(&snap, |_| true, false),
             code: 0,
         })
     })

@@ -1,19 +1,27 @@
-# EntropyJig
+# Jig
 
-EntropyJig (`jig`) is a file-based issue tracker and project memory for people
+Jig is a file-based issue tracker and project memory for people
 and coding agents. Issues are plain Markdown files with YAML frontmatter under
 `.jig/`; there is no database, service, or mandatory Git integration. Each
 checkout sees its own files. People can read the records without the CLI;
 `jig` adds a shared workflow for dependencies, claims, and review.
 
-See [the v1 specification](SPEC.md) for the workflow and file format.
+See [the v1 specification](SPEC.md) for the workflow and file format. Jig lives
+at [EntropyLogix/Jig](https://github.com/EntropyLogix/Jig).
 
 ## Install
 
-Use Rust 1.89 or newer on Linux or macOS. From this repository:
+Use Rust 1.89 or newer on Linux or macOS. From this repository checkout:
 
 ```sh
 cargo install --path . --locked
+```
+
+To install a tagged release from GitHub (once the owner has published the
+tag), for example `v1.0.0`:
+
+```sh
+cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v1.0.0
 ```
 
 The `jig` binary lands on your Cargo `PATH` (usually `~/.cargo/bin`) and needs
@@ -123,10 +131,12 @@ same fields.
 `jig init` installs agent integration into the project by default, so running
 it in an already-initialized checkout is the opt-in path:
 
-- `AGENTS.md` gains a `<!-- BEGIN ENTROPYJIG -->…<!-- END ENTROPYJIG -->`
+- `AGENTS.md` gains a `<!-- BEGIN JIG v:N hash:H -->…<!-- END JIG -->`
   managed block with the workflow rules. Existing file bytes are preserved;
-  an already-present marker pair is left alone (even if edited), and malformed
-  or duplicated markers refuse the edit.
+  an unmodified older-version block is upgraded in place, a block edited by
+  hand (hash mismatch) is left alone with a notice, and malformed or
+  duplicated markers refuse the edit. `jig check` reports a missing or
+  outdated block.
 - `.claude/settings.json` and `.codex/hooks.json` each gain one SessionStart
   hook group running `jig start --hook-json` (no matcher: it fires for every
   session source, including after `/clear` and compaction). Codex 0.133 added the compact
@@ -139,7 +149,7 @@ it in an already-initialized checkout is the opt-in path:
   gains the group compactly without added whitespace. A file that is not
   valid JSON with the expected hook shape,
   that spells `hooks` or `SessionStart` twice (including escaped spellings),
-  or that already contains a different or duplicated EntropyJig handler,
+  or that already contains a different or duplicated Jig handler,
   refuses init rather than being repaired. `jig` must be on `PATH` for both
   clients. Codex shows the new project hook once via `/hooks` for manual
   confirmation; Claude applies its own project trust. No global settings and
@@ -185,5 +195,5 @@ cargo clippy --locked --all-targets -- -D warnings
 
 ## License
 
-EntropyJig is released under the [MIT License](LICENSE). Third-party notices
+Jig is released under the [MIT License](LICENSE). Third-party notices
 and license texts are listed in [licenses/THIRD-PARTY.md](licenses/THIRD-PARTY.md).

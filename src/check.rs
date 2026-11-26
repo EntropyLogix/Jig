@@ -1,5 +1,6 @@
 use crate::clock;
 use crate::domain;
+use crate::instructions;
 use crate::issue::Issue;
 use crate::memory;
 use crate::store::{self, Place};
@@ -205,13 +206,6 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                 .or_insert_with(|| "issue file is in the wrong directory".to_string());
             continue;
         }
-        if !domain::field_problems(&rec.issue).is_empty() {
-            rec.usable = false;
-            unavailable
-                .entry(rec.issue.id.clone())
-                .or_insert_with(|| "issue has inconsistent fields".to_string());
-            continue;
-        }
         if unavailable.contains_key(&rec.issue.id) {
             rec.usable = false;
         }
@@ -372,6 +366,10 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                 }
             }
         },
+    }
+
+    if let Some((problem, hint)) = instructions::problem(jig.parent().unwrap()) {
+        problems.push(Problem::at(PathBuf::from("AGENTS.md"), problem, hint));
     }
 
     match store::inspect_move(jig) {

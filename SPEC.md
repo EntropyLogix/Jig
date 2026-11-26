@@ -1,6 +1,6 @@
-# EntropyJig v1
+# Jig v1
 
-EntropyJig is a file-based issue tracker and project memory for people and
+Jig is a file-based issue tracker and project memory for people and
 coding agents. The executable is `jig`. This document records the agreed
 contract and acceptance checks for v1.
 
@@ -8,15 +8,19 @@ contract and acceptance checks for v1.
 
 ### Installation And Project Discovery
 
-- Install `jig` once per user and machine, on `PATH`.
+- Install `jig` once per user and machine, on `PATH`. The project lives at
+  `https://github.com/EntropyLogix/Jig`; the package, library, and binary
+  are all named `jig`. Machine-local state lives under
+  `$XDG_STATE_HOME/jig` (or `~/.local/state/jig`).
 - `jig init`, run in the project root, creates `.jig/`. Subsequent commands
   find it by walking up from the current directory. Without a registry in the
   current project, report an error. No path argument, project override,
   machine-local project config, or redirect to another checkout is needed.
   `jig start` does not need to print the absolute path on each run.
 - `jig init [--no-hooks]` also installs the approved agent integration by
-  default: a marker-delimited `## Issue tracking with EntropyJig` block in
-  the project's `AGENTS.md`, and a project-local SessionStart hook running
+  default: a marker-delimited `## Issue tracking with Jig` block in
+  the project's `AGENTS.md` (see Agent Instructions Block), and a
+  project-local SessionStart hook running
   `jig start --hook-json` merged into `.claude/settings.json` and
   `.codex/hooks.json`. The merge inserts only the new hook group into the
   existing text: every other byte of the file, including key order,
@@ -88,7 +92,9 @@ contract and acceptance checks for v1.
   list every readable issue, print one warning per skipped file to stderr
   pointing to `jig check`, and exit 0 with JSON on stdout in its normal
   shape. `tree` of an ID whose own file is unusable fails, and `show` of
-  such an ID fails as before.
+  such an ID fails as before. An issue with inconsistent fields (see
+  Registry Check) is readable: `list`, `tree`, and `show` include it, and
+  `list` and `tree` warn about it; `ready` skips it and `claim` refuses it.
 - `claim ID` rechecks eligibility under the lock before switching to
   `claimed`. It refuses `proposed` issues, also with `--force`.
   `--by` is an optional label, not identity or authentication.
@@ -144,7 +150,7 @@ contract and acceptance checks for v1.
   whether or not a summary was supplied. Show the summary with the full
   issue, not in `start`, `ready`, or default lists. No summary-only view
   is needed in v1.
-- Closing summaries are additive. EntropyJig never replaces or shortens
+- Closing summaries are additive. Jig never replaces or shortens
   existing issue content when closing or archiving an issue.
 - `jig note ID TEXT [--by NAME]` appends to `## Notes` in the issue file, with
   UTC date and time and an author if supplied. A new note is one line of at
@@ -163,6 +169,46 @@ contract and acceptance checks for v1.
   TOPIC` reads one fact, and `recall` with no topic lists only the names.
   No automatic key generation or `--key` is needed. `start` never loads the
   full memory automatically.
+
+### Agent Instructions Block
+
+- The block is delimited by `<!-- BEGIN JIG v:N hash:H -->` and
+  `<!-- END JIG -->`, where `N` is the block format version and `H` is a
+  short hash of the text between the markers as `jig` wrote it.
+- `init` appends the block when no markers exist. When the markers exist
+  and the hash matches the text, the block is unmodified: `init` replaces
+  an older version with the current one and leaves a current one alone.
+  When the hash does not match, a person edited the block: `init` leaves
+  it untouched and reports that it is customized. Malformed or duplicated
+  markers refuse the edit, as before.
+- `check` reports a missing block and an outdated unmodified block (hint:
+  `jig init`). A customized block of the current version is not a problem.
+  A customized block of an older version is reported with the hint to
+  remove the block, run `jig init`, and reapply the local edits.
+- The block text tells agents, in this order:
+  - the project tracks work with `jig` and keeps no task lists in other
+    Markdown or TODO files;
+  - `jig` comes from `https://github.com/EntropyLogix/Jig`; if it is not
+    installed, ask a person to install it with
+    `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag vX.Y.Z`,
+    where `X.Y.Z` is the version of `jig` that wrote the block;
+  - run `jig start`; `jig ready` lists approved, unblocked work; `jig show ID`
+    reads one issue; an issue authorizes only its described scope;
+  - claim before working with `jig claim ID --by NAME` using the agent's
+    name; `--force` only on a person's explicit instruction for that issue;
+  - submit with `jig review ID --summary TEXT`; approving, revising, and
+    closing are for people unless a person explicitly says otherwise for
+    that issue;
+  - work found along the way becomes `jig add TITLE --body TEXT` (a
+    proposal, not work) plus a `jig note` on the issue where it was found;
+  - when stopping before the work is done, leave a `jig note` and run
+    `jig unclaim ID` if the agent will not continue;
+  - read project facts with `jig recall [TOPIC]`, record durable project
+    facts with `jig remember TOPIC TEXT`, and keep personal preferences in
+    the agent's own memory;
+  - if `jig ready` warns or lists nothing, run `jig check` and report to a
+    person; never remove dependencies or approve proposals to get unblocked.
+- The `jig start` workflow text states the same rules.
 
 ### Registry Check
 
@@ -262,6 +308,10 @@ contract and acceptance checks for v1.
   eligible issues, warns on stderr, and exits 0; `claim` of the affected
   issue fails. Add a file with merge conflict markers: `ready`, `list`, and
   `tree` still list every other issue, warn, and exit 0.
+- Run `init` on a project with an older unmodified block, a customized
+  block, and no block: the first is upgraded, the second is left
+  byte-for-byte, the third is appended; `check` reports exactly the cases
+  described in Agent Instructions Block.
 - Seed one instance of every `check` problem: a single `check` run reports
   all of them with hints and changes no byte in the registry.
 - Remove write access from a freshly cloned registry without `.lock`: all
