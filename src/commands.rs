@@ -33,41 +33,50 @@ fn usage(msg: impl Into<String>) -> Fail {
     }
 }
 
-const HELP: &str = "Jig - file-based issue tracker and project memory\n\
-\n\
-Usage: jig [--json] COMMAND [ARGS]\n\
-\n\
-Commands:\n\
-  init [--no-hooks]                    create .jig/, AGENTS.md, and project hooks\n\
-  start [--json|--hook-json]            workflow summary\n\
-  add TITLE [--approved] [-p|--priority N (0-4, default 2)] [--body TEXT|-] [--parent ID] [--dep ID ...]\n\
-  ready [--json]                        unblocked open issues\n\
-  show ID [--json]                      one full issue\n\
-  list [--status S] [--release NAME] [--sort oldest|newest] [--json]\n\
-                                        issues (S: proposed|open|claimed|review|closed|all)\n\
-  tree ID [--json]                      issue with descendants\n\
-  approve ID                            move a proposed issue to open\n\
-  revise ID --reason TEXT               return an open issue to proposed\n\
-  claim ID [--by NAME] [--force]        move an open issue to claimed\n\
-  unclaim ID                            return a claimed issue to open\n\
-  update ID [--title T] [-p|--priority N] [--body TEXT|-] [--release NAME]\n\
-  review ID [--summary TEXT]            submit a claimed issue for review\n\
-  rework ID --reason TEXT               return a review issue to claimed\n\
-  close ID --reason TEXT [--summary T]  archive an active issue\n\
-  reopen ID --reason TEXT               reactivate a closed issue\n\
-  release NAME                          seal closed issues with a release name\n\
-  dep add|rm ID BLOCKER                 manage blockers\n\
-  note ID TEXT [--by NAME]              append a one-line note\n\
-  defer ID --until YYYY-MM-DD | --clear\n\
-  remember TOPIC TEXT                   record a project fact\n\
-  recall [TOPIC] [--json]               read project facts\n\
-  check [--json]                         report registry problems without repairing\n\
-\n\
-Options:\n\
-  --json          machine output for read commands (before or after the command)\n\
-  --help          this text\n\
-  --version       version\n\
-  --              stop option parsing";
+const HELP: &str = concat!(
+    "Jig - file-based issue tracker and project memory\n\n",
+    "Usage: jig [--json] COMMAND [ARGS]\n\n",
+    "Browse\n",
+    "  list [--status S] [--release NAME] [--sort oldest|newest]\n",
+    "                                  issues grouped by status (default)\n",
+    "  show ID                         one full issue and its documents\n",
+    "  tree ID                         issue with its subtasks\n",
+    "  ready                           open, unblocked work for agents\n\n",
+    "Create and edit\n",
+    "  add TITLE [--approved] [-p N] [--body TEXT|-] [--parent ID] [--dep ID...]\n",
+    "                                  new issue (proposed unless --approved)\n",
+    "  update ID [--title T] [-p N] [--body TEXT|-] [--release NAME]\n",
+    "                                  change the given fields\n",
+    "  note ID TEXT [--by NAME]        one-line note\n",
+    "  dep add|rm ID BLOCKER           manage blockers\n",
+    "  defer ID --until YYYY-MM-DD | --clear\n",
+    "                                  hide an issue until a date\n\n",
+    "Work (agents)\n",
+    "  claim ID [--by NAME] [--force]  start work on an open issue\n",
+    "  unclaim ID                      give a claimed issue back\n",
+    "  review ID [--summary TEXT]      submit for review\n\n",
+    "Decide (people)\n",
+    "  approve ID                      proposed -> open\n",
+    "  revise ID --reason TEXT         open -> proposed\n",
+    "  rework ID --reason TEXT         review -> claimed\n",
+    "  close ID --reason TEXT [--summary TEXT]\n",
+    "                                  archive an issue\n",
+    "  reopen ID --reason TEXT         reactivate a closed issue\n",
+    "  release NAME                    seal closed issues with a release name\n\n",
+    "Memory\n",
+    "  remember TOPIC TEXT             record a project fact\n",
+    "  recall [TOPIC]                  read project facts\n\n",
+    "Setup\n",
+    "  init [--no-hooks]               create .jig/, AGENTS.md and project hooks\n",
+    "  start                           workflow summary for agents\n",
+    "  check                           report registry problems\n\n",
+    "Options\n",
+    "  --json             machine output for read commands\n",
+    "  -p, --priority N   0 (highest) to 4, default 2\n",
+    "  S                  proposed|open|claimed|review|closed|all\n",
+    "  --                 end of options; what follows is text\n",
+    "  --help, --version",
+);
 
 struct Parsed {
     pos: Vec<String>,
@@ -333,6 +342,58 @@ impl CommandOutput {
 
 const JSON_CMDS: [&str; 7] = ["start", "ready", "show", "list", "tree", "recall", "check"];
 
+type Handler = fn(&[String], &Path, bool) -> R<CommandOutput>;
+
+const COMMANDS: &[(&str, Handler)] = &[
+    ("ready", cmd_ready),
+    ("check", cmd_check),
+    ("init", |a, c, _| cmd_init(a, c).map(CommandOutput::plain)),
+    ("start", |a, c, j| {
+        cmd_start(a, c, j).map(CommandOutput::plain)
+    }),
+    ("add", |a, c, _| cmd_add(a, c).map(CommandOutput::plain)),
+    ("show", cmd_show),
+    ("list", cmd_list),
+    ("tree", cmd_tree),
+    ("approve", |a, c, _| {
+        cmd_approve(a, c).map(CommandOutput::plain)
+    }),
+    ("revise", |a, c, _| {
+        cmd_revise(a, c).map(CommandOutput::plain)
+    }),
+    ("claim", |a, c, _| cmd_claim(a, c).map(CommandOutput::plain)),
+    ("unclaim", |a, c, _| {
+        cmd_unclaim(a, c).map(CommandOutput::plain)
+    }),
+    ("update", |a, c, _| {
+        cmd_update(a, c).map(CommandOutput::plain)
+    }),
+    ("review", |a, c, _| {
+        cmd_review(a, c).map(CommandOutput::plain)
+    }),
+    ("rework", |a, c, _| {
+        cmd_rework(a, c).map(CommandOutput::plain)
+    }),
+    ("close", |a, c, _| cmd_close(a, c).map(CommandOutput::plain)),
+    ("reopen", |a, c, _| {
+        cmd_reopen(a, c).map(CommandOutput::plain)
+    }),
+    ("release", |a, c, _| cmd_release(a, c)),
+    ("dep", |a, c, _| cmd_dep(a, c).map(CommandOutput::plain)),
+    ("note", |a, c, _| cmd_note(a, c).map(CommandOutput::plain)),
+    ("defer", |a, c, _| cmd_defer(a, c).map(CommandOutput::plain)),
+    ("remember", |a, c, _| {
+        cmd_remember(a, c).map(CommandOutput::plain)
+    }),
+    ("recall", |a, c, j| {
+        cmd_recall(a, c, j).map(CommandOutput::plain)
+    }),
+];
+
+pub fn command_names() -> impl Iterator<Item = &'static str> {
+    COMMANDS.iter().map(|(name, _)| *name)
+}
+
 pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
     if args.is_empty() {
         return Ok(CommandOutput::plain(format!("{HELP}\n")));
@@ -372,32 +433,10 @@ pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
     if json && !JSON_CMDS.contains(&cmd.as_str()) {
         return Err(usage(format!("--json is not valid for `{cmd}`")));
     }
-    match cmd.as_str() {
-        "ready" => cmd_ready(&tail, cwd, json),
-        "check" => cmd_check(&tail, cwd, json),
-        "init" => cmd_init(&tail, cwd).map(CommandOutput::plain),
-        "start" => cmd_start(&tail, cwd, json).map(CommandOutput::plain),
-        "add" => cmd_add(&tail, cwd).map(CommandOutput::plain),
-        "show" => cmd_show(&tail, cwd, json).map(CommandOutput::plain),
-        "list" => cmd_list(&tail, cwd, json),
-        "tree" => cmd_tree(&tail, cwd, json),
-        "approve" => cmd_approve(&tail, cwd).map(CommandOutput::plain),
-        "revise" => cmd_revise(&tail, cwd).map(CommandOutput::plain),
-        "claim" => cmd_claim(&tail, cwd).map(CommandOutput::plain),
-        "unclaim" => cmd_unclaim(&tail, cwd).map(CommandOutput::plain),
-        "update" => cmd_update(&tail, cwd).map(CommandOutput::plain),
-        "review" => cmd_review(&tail, cwd).map(CommandOutput::plain),
-        "rework" => cmd_rework(&tail, cwd).map(CommandOutput::plain),
-        "close" => cmd_close(&tail, cwd).map(CommandOutput::plain),
-        "reopen" => cmd_reopen(&tail, cwd).map(CommandOutput::plain),
-        "release" => cmd_release(&tail, cwd),
-        "dep" => cmd_dep(&tail, cwd).map(CommandOutput::plain),
-        "note" => cmd_note(&tail, cwd).map(CommandOutput::plain),
-        "defer" => cmd_defer(&tail, cwd).map(CommandOutput::plain),
-        "remember" => cmd_remember(&tail, cwd).map(CommandOutput::plain),
-        "recall" => cmd_recall(&tail, cwd, json).map(CommandOutput::plain),
-        _ => Err(usage(format!("unknown command {cmd}; try `jig --help`"))),
-    }
+    let Some((_, handler)) = COMMANDS.iter().find(|(name, _)| *name == cmd) else {
+        return Err(usage(format!("unknown command {cmd}; try `jig --help`")));
+    };
+    handler(&tail, cwd, json)
 }
 
 fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
@@ -611,13 +650,26 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
             if !domain::field_problems(i).is_empty() {
                 continue;
             }
-            match domain::eligibility(i, &today, false, |id| snap.resolve(id)) {
-                Ok(_) => rows.push(i.clone()),
-                Err(domain::Ineligible::Reference(reference)) => warnings.push(format!(
-                    "skipping {}: unresolved {reference}; run `jig check`",
-                    i.id
-                )),
-                Err(_) => continue,
+            let eligibility = domain::eligibility(
+                i,
+                &today,
+                |id| snap.resolve(id),
+                |id| snap.descendants(id),
+                |id| snap.unresolved_descendants(id),
+            );
+            if eligibility.ready() {
+                rows.push(i.clone());
+            } else if !eligibility.unresolved.is_empty() {
+                let unresolved: Vec<String> = eligibility
+                    .unresolved
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                warnings.push(format!(
+                    "skipping {}: unresolved {}; run `jig check`",
+                    i.id,
+                    unresolved.join(", ")
+                ));
             }
         }
         sort_rows(&mut rows);
@@ -685,14 +737,155 @@ fn cmd_check(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     })
 }
 
-fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<String> {
+fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> {
+    let docs_root = jig.join("docs");
+    match std::fs::symlink_metadata(&docs_root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Ok((
+                Vec::new(),
+                vec![
+                    ".jig/docs: must be a real directory (not a symbolic link); run `jig check`"
+                        .to_string(),
+                ],
+            ));
+        }
+        Ok(_) => {
+            return Ok((
+                Vec::new(),
+                vec![".jig/docs: must be a real directory; run `jig check`".to_string()],
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        Err(error) => {
+            return Ok((
+                Vec::new(),
+                vec![format!(
+                    ".jig/docs: cannot inspect: {error}; run `jig check`"
+                )],
+            ));
+        }
+    }
+    let docs = jig.join("docs").join(id);
+    let metadata = match std::fs::symlink_metadata(&docs) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        Err(error) => {
+            return Ok((
+                Vec::new(),
+                vec![format!(".jig/docs/{id}: cannot inspect: {error}")],
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok((
+            Vec::new(),
+            vec![format!(
+                ".jig/docs/{id}: must be a real directory (not a symbolic link); run `jig check`"
+            )],
+        ));
+    }
+    if !metadata.is_dir() {
+        return Ok((
+            Vec::new(),
+            vec![format!(
+                ".jig/docs/{id}: must be a real directory; run `jig check`"
+            )],
+        ));
+    }
+
+    fn walk(root: &Path, dir: &Path, paths: &mut Vec<String>, warnings: &mut Vec<String>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                let rel = dir
+                    .strip_prefix(root)
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| dir.to_string_lossy().replace('\\', "/"));
+                warnings.push(format!("{rel}: cannot read: {error}; run `jig check`"));
+                return;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    let rel = dir
+                        .strip_prefix(root)
+                        .map(|path| path.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| dir.to_string_lossy().replace('\\', "/"));
+                    warnings.push(format!(
+                        "{rel}: cannot read entry: {error}; run `jig check`"
+                    ));
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    let rel = path
+                        .strip_prefix(root)
+                        .map(|path| path.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+                    warnings.push(format!("{rel}: cannot inspect: {error}; run `jig check`"));
+                    continue;
+                }
+            };
+            if metadata.is_dir() {
+                walk(root, &path, paths, warnings);
+            } else if metadata.is_file() {
+                let relative = path.strip_prefix(root).unwrap_or(path.as_path());
+                paths.push(relative.to_string_lossy().replace('\\', "/"));
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+                warnings.push(format!(
+                    "{rel}: must be a regular file or directory; run `jig check`"
+                ));
+            }
+        }
+    }
+
+    let project_root = jig
+        .parent()
+        .ok_or_else(|| fail("cannot determine project root"))?;
+    let mut paths = Vec::new();
+    let mut warnings = Vec::new();
+    walk(project_root, &docs, &mut paths, &mut warnings);
+    paths.sort();
+    Ok((paths, warnings))
+}
+
+fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
     pos_n(&p, 1, "show ID")?;
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
         let l = load(jig, &p.pos[0])?;
-        check::scan(jig).resolve(&l.issue.id).map_err(fail)?;
+        let snap = check::scan(jig);
+        snap.resolve(&l.issue.id).map_err(|e| fail(e.to_string()))?;
         let i = &l.issue;
+        let (docs, doc_warnings) = issue_docs(jig, &i.id)?;
+        let docs_dir = format!(".jig/docs/{}/", i.id);
+        let mut readiness = domain::eligibility(
+            i,
+            &clock::today(),
+            |id| snap.resolve(id),
+            |id| snap.descendants(id),
+            |id| snap.unresolved_descendants(id),
+        );
+        if !domain::field_problems(i).is_empty() {
+            readiness.unresolved.push(domain::Unresolved::Own(
+                store::diagnostic_path(&l.path).to_path_buf(),
+            ));
+        }
         if json {
             let deps = format!(
                 "[{}]",
@@ -702,30 +895,101 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<String> {
                     .collect::<Vec<_>>()
                     .join(",")
             );
-            Ok(format!(
-                "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
+            let unresolved = format!(
+                "[{}]",
+                readiness
+                    .unresolved
+                    .iter()
+                    .map(|s| issue::esc(&s.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let blockers = format!(
+                "[{}]",
+                readiness
+                    .blockers
+                    .iter()
+                    .map(|s| issue::esc(s))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let subtasks = format!(
+                "[{}]",
+                readiness
+                    .subtasks
+                    .iter()
+                    .map(|s| issue::esc(s))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let readiness_json = format!(
+                "{{\"ready\":{},\"deferred_until\":{},\"deferred_by\":{},\"unresolved\":{},\"blockers\":{},\"subtasks\":{}}}",
+                readiness.ready(),
+                jopt(&readiness.deferred_until),
+                jopt(&readiness.deferred_by),
+                unresolved,
+                blockers,
+                subtasks
+            );
+            Ok(CommandOutput {
+                stdout: format!(
+                    "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
                  \"depends_on\":{},\"assignee\":{},\"defer_until\":{},\"created_at\":{},\
                  \"updated_at\":{},\"closed_at\":{},\"release\":{},\"body\":{},\"history\":{},\"notes\":{},\
-                 \"closing_summary\":{}}}\n",
-                issue::esc(&i.id),
-                issue::esc(&i.title),
-                issue::esc(i.status.as_str()),
-                i.priority,
-                jopt(&i.parent),
-                deps,
-                jopt(&i.assignee),
-                jopt(&i.defer_until),
-                jopt(&i.created_at),
-                jopt(&i.updated_at),
-                jopt(&i.closed_at),
-                jopt(&i.release),
-                issue::esc(&i.body),
-                issue::esc(&i.history),
-                issue::esc(&i.notes),
-                jopt(&i.closing_summary),
-            ))
+                 \"closing_summary\":{},\"readiness\":{},\"docs_dir\":{},\"docs\":[{}]}}\n",
+                    issue::esc(&i.id),
+                    issue::esc(&i.title),
+                    issue::esc(i.status.as_str()),
+                    i.priority,
+                    jopt(&i.parent),
+                    deps,
+                    jopt(&i.assignee),
+                    jopt(&i.defer_until),
+                    jopt(&i.created_at),
+                    jopt(&i.updated_at),
+                    jopt(&i.closed_at),
+                    jopt(&i.release),
+                    issue::esc(&i.body),
+                    issue::esc(&i.history),
+                    issue::esc(&i.notes),
+                    jopt(&i.closing_summary),
+                    readiness_json,
+                    issue::esc(&docs_dir),
+                    docs.iter()
+                        .map(|path| issue::esc(path))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                warnings: doc_warnings,
+                code: 0,
+            })
         } else {
-            Ok(l.text.clone())
+            let mut output = l.text.trim_end_matches('\n').to_string();
+            output.push_str("\n\nReady: ");
+            if readiness.ready() {
+                output.push_str("yes\n");
+            } else {
+                output.push_str("no — ");
+                output.push_str(&readiness.reason_text(true));
+                output.push('\n');
+            }
+            output.push_str("Documents: ");
+            output.push_str(&docs_dir);
+            if docs.is_empty() {
+                output.push_str(" (none)\n");
+            } else {
+                output.push('\n');
+                for path in docs {
+                    output.push_str("  ");
+                    output.push_str(&path);
+                    output.push('\n');
+                }
+            }
+            Ok(CommandOutput {
+                stdout: output,
+                warnings: doc_warnings,
+                code: 0,
+            })
         }
     })
 }
@@ -763,12 +1027,12 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         opt(&p, "status").unwrap_or("active")
     }
     .to_string();
-    if ![
-        "active", "proposed", "open", "claimed", "review", "closed", "all",
-    ]
-    .contains(&filter.as_str())
+    if let Some(explicit) = opt(&p, "status")
+        && !["proposed", "open", "claimed", "review", "closed", "all"].contains(&explicit)
     {
-        return Err(usage(format!("invalid status filter {filter:?}")));
+        return Err(usage(format!(
+            "invalid status filter {explicit:?}; expected proposed|open|claimed|review|closed|all"
+        )));
     }
     let order = match opt(&p, "sort") {
         None => None,
@@ -801,9 +1065,36 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
             Some(order) => sort_chronologically(&mut rows, order),
             None => sort_rows(&mut rows),
         }
+        let grouped = !json && order.is_none() && release.is_none() && opt(&p, "status").is_none();
         let stdout = if json {
             let items: Vec<String> = rows.iter().map(row_json).collect();
             format!("[{}]\n", items.join(","))
+        } else if grouped {
+            let groups = [
+                (Status::Review, "REVIEW"),
+                (Status::Proposed, "PROPOSED"),
+                (Status::Claimed, "CLAIMED"),
+                (Status::Open, "OPEN"),
+            ];
+            let mut out = String::new();
+            for (status, label) in groups {
+                let group: Vec<&Issue> = rows.iter().filter(|i| i.status == status).collect();
+                if group.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("{label} ({})\n", group.len()));
+                for i in group {
+                    let who = i.assignee.as_deref().unwrap_or("-");
+                    out.push_str(&format!(
+                        "  {} {} {} {who} {}\n",
+                        i.id,
+                        i.status.as_str(),
+                        i.priority,
+                        i.title
+                    ));
+                }
+            }
+            out
         } else {
             let mut out = String::new();
             for i in &rows {
@@ -846,7 +1137,7 @@ fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     with_registry(cwd, |jig| {
         let snap = check::scan(jig);
         let id = resolve_id(&p.pos[0])?;
-        let root = snap.resolve(&id).map_err(fail)?;
+        let root = snap.resolve(&id).map_err(|e| fail(e.to_string()))?;
         let available: HashSet<&str> = snap.issues().map(|i| i.id.as_str()).collect();
         let mut kids: HashMap<String, Vec<Issue>> = HashMap::new();
         for i in snap.issues() {
@@ -936,14 +1227,40 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
     let l = load(jig, &p.pos[0])?;
     let snap = check::scan(jig);
     if let Err(e) = snap.resolve(&l.issue.id) {
-        return Err(fail(e));
+        return Err(fail(e.to_string()));
     }
     if let Some((problem, _)) = domain::field_problems(&l.issue).first() {
         return Err(fail(format!("issue {}: {problem}", l.issue.id)));
     }
     let today = clock::today();
-    let bypassed = domain::eligibility(&l.issue, &today, force, |id| snap.resolve(id))
-        .map_err(|e| fail(e.message(&l.issue.id)))?;
+    let eligibility = domain::eligibility(
+        &l.issue,
+        &today,
+        |id| snap.resolve(id),
+        |id| snap.descendants(id),
+        |id| snap.unresolved_descendants(id),
+    );
+    let blocked = !eligibility.blockers.is_empty() || !eligibility.subtasks.is_empty();
+    if !eligibility.ready()
+        && (!force
+            || !blocked
+            || eligibility.status.is_some()
+            || eligibility.deferred_until.is_some()
+            || !eligibility.unresolved.is_empty())
+    {
+        let prefix = if eligibility.status.as_deref() == Some("proposed") {
+            " awaits approval;"
+        } else {
+            ""
+        };
+        return Err(fail(format!(
+            "issue {}{} is not ready: {}",
+            l.issue.id,
+            prefix,
+            eligibility.reason_text(true)
+        )));
+    }
+    let bypassed = eligibility.bypassed();
     let by = opt(&p, "by").map(|s| s.to_string());
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, Action::Claim).map_err(fail)?;
@@ -955,11 +1272,18 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
             .as_deref()
             .map(|b| format!(" by {b}"))
             .unwrap_or_default();
+        let mut parts = Vec::new();
+        if !eligibility.blockers.is_empty() {
+            parts.push(format!("blockers {}", eligibility.blockers.join(", ")));
+        }
+        if !eligibility.subtasks.is_empty() {
+            parts.push(format!("subtasks {}", eligibility.subtasks.join(", ")));
+        }
         hist_push(
             &mut i,
             hist_entry(&format!(
                 "claimed --force{who} bypassing {}",
-                bypassed.join(", ")
+                parts.join("; ")
             )),
         );
     }

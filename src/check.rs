@@ -1,7 +1,7 @@
 use crate::clock;
 use crate::domain;
 use crate::instructions;
-use crate::issue::Issue;
+use crate::issue::{Issue, Status};
 use crate::memory;
 use crate::store::{self, Place};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,24 +34,93 @@ pub(crate) struct Record {
 
 pub(crate) struct Snapshot {
     usable: BTreeMap<String, Issue>,
-    unavailable: BTreeMap<String, String>,
+    unavailable: BTreeMap<String, Unavailable>,
+    children: BTreeMap<String, Vec<ChildRef>>,
     pub records: Vec<Record>,
     pub problems: Vec<Problem>,
 }
 
+struct Unavailable {
+    reason: String,
+    path: PathBuf,
+}
+
+#[derive(Clone)]
+struct ChildRef {
+    id: String,
+    status: Option<Status>,
+    path: PathBuf,
+    usable: bool,
+}
+
 impl Snapshot {
-    pub(crate) fn resolve(&self, id: &str) -> Result<Issue, String> {
+    pub(crate) fn resolve(&self, id: &str) -> Result<Issue, domain::ResolveError> {
         if let Some(issue) = self.usable.get(id) {
             return Ok(issue.clone());
         }
-        if let Some(reason) = self.unavailable.get(id) {
-            return Err(format!("issue {id} is unusable: {reason}"));
+        if let Some(entry) = self.unavailable.get(id) {
+            return Err(domain::ResolveError::Unusable {
+                id: id.to_string(),
+                path: entry.path.clone(),
+                reason: entry.reason.clone(),
+            });
         }
-        Err(format!("missing issue {id}"))
+        Err(domain::ResolveError::Missing { id: id.to_string() })
     }
 
     pub(crate) fn issues(&self) -> impl Iterator<Item = &Issue> {
         self.usable.values()
+    }
+
+    pub(crate) fn descendants(&self, id: &str) -> Vec<(String, Status)> {
+        let mut result = Vec::new();
+        let mut stack = self
+            .children
+            .get(id)
+            .into_iter()
+            .flat_map(|issues| issues.iter())
+            .collect::<Vec<_>>();
+        let mut seen = BTreeSet::new();
+        while let Some(child) = stack.pop() {
+            if !seen.insert(child.id.as_str()) {
+                continue;
+            }
+            if child.usable
+                && child.status.is_some()
+                && let Some(issue) = self.usable.get(&child.id)
+            {
+                result.push((issue.id.clone(), issue.status));
+            }
+            if let Some(nested) = self.children.get(child.id.as_str()) {
+                stack.extend(nested.iter());
+            }
+        }
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        result
+    }
+
+    pub(crate) fn unresolved_descendants(&self, id: &str) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+        let mut stack = self
+            .children
+            .get(id)
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .collect::<Vec<_>>();
+        let mut seen = BTreeSet::new();
+        while let Some(child) = stack.pop() {
+            if !seen.insert(child.id.clone()) {
+                continue;
+            }
+            if !child.usable {
+                result.push(child.path.clone());
+            }
+            if let Some(nested) = self.children.get(&child.id) {
+                stack.extend(nested.iter());
+            }
+        }
+        result.sort();
+        result
     }
 }
 
@@ -63,6 +132,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
     let mut records = Vec::new();
     let mut problems = Vec::new();
     let mut claimants: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    let mut parse_failures: Vec<(String, PathBuf)> = Vec::new();
     for place in [Place::Open, Place::Closed] {
         let dir = jig.join(place.dir());
         let rel_dir = PathBuf::from(".jig").join(place.dir());
@@ -128,7 +198,10 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                 continue;
             }
             let stem = name[..name.len() - 3].to_string();
-            claimants.entry(stem).or_default().push(path.clone());
+            claimants
+                .entry(stem.clone())
+                .or_default()
+                .push(path.clone());
             match store::read_issue_file(&ent.path()) {
                 Err(e) => {
                     let hint = if e.starts_with(crate::issue::BAD_PRIORITY)
@@ -139,6 +212,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                         "fix the file or restore it from version control"
                     };
                     problems.push(Problem::at(path, e, hint));
+                    parse_failures.push((stem, rel(place, &ent.file_name())));
                 }
                 Ok((issue, _)) => {
                     if issue.id != name[..name.len() - 3] {
@@ -157,7 +231,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             }
         }
     }
-    let mut unavailable: BTreeMap<String, String> = BTreeMap::new();
+    let mut unavailable: BTreeMap<String, Unavailable> = BTreeMap::new();
     for (id, paths) in &claimants {
         if paths.len() < 2 {
             continue;
@@ -169,7 +243,13 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                 "keep one record for this issue and remove the others",
             ));
         }
-        unavailable.insert(id.clone(), "duplicate issue id".to_string());
+        unavailable.insert(
+            id.clone(),
+            Unavailable {
+                reason: "duplicate issue id".to_string(),
+                path: paths[0].clone(),
+            },
+        );
     }
     for rec in &mut records {
         let stem = rec
@@ -187,10 +267,14 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             rec.usable = false;
             unavailable
                 .entry(rec.issue.id.clone())
-                .or_insert_with(|| "file name does not match issue id".to_string());
-            unavailable
-                .entry(stem)
-                .or_insert_with(|| format!("file decodes as issue {}", rec.issue.id));
+                .or_insert_with(|| Unavailable {
+                    reason: "file name does not match issue id".to_string(),
+                    path: rec.path.clone(),
+                });
+            unavailable.entry(stem).or_insert_with(|| Unavailable {
+                reason: format!("file decodes as issue {}", rec.issue.id),
+                path: rec.path.clone(),
+            });
             continue;
         }
         if Place::of(rec.issue.status) != rec.place {
@@ -206,7 +290,10 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             rec.usable = false;
             unavailable
                 .entry(rec.issue.id.clone())
-                .or_insert_with(|| "issue file is in the wrong directory".to_string());
+                .or_insert_with(|| Unavailable {
+                    reason: "issue file is in the wrong directory".to_string(),
+                    path: rec.path.clone(),
+                });
             continue;
         }
         if unavailable.contains_key(&rec.issue.id) {
@@ -218,10 +305,54 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
         .filter(|r| r.usable)
         .map(|r| (r.issue.id.clone(), r.issue.clone()))
         .collect();
+    for (stem, path) in parse_failures {
+        unavailable.entry(stem).or_insert_with(|| Unavailable {
+            reason: "file cannot be parsed".to_string(),
+            path,
+        });
+    }
+    let mut children: BTreeMap<String, Vec<ChildRef>> = BTreeMap::new();
+    for rec in &records {
+        if let Some(parent) = rec.issue.parent.as_deref() {
+            let child_usable = rec.usable && crate::domain::field_problems(&rec.issue).is_empty();
+            children
+                .entry(parent.to_string())
+                .or_default()
+                .push(ChildRef {
+                    id: rec.issue.id.clone(),
+                    status: Some(rec.issue.status),
+                    path: rec.path.clone(),
+                    usable: child_usable,
+                });
+        }
+    }
+    for (stem, Unavailable { path, .. }) in unavailable.iter() {
+        let mut child = stem.as_str();
+        while let Some((parent, _)) = child.rsplit_once('.') {
+            if !children
+                .entry(parent.to_string())
+                .or_default()
+                .iter()
+                .any(|existing| existing.id == *stem && existing.path == *path)
+            {
+                children
+                    .entry(parent.to_string())
+                    .or_default()
+                    .push(ChildRef {
+                        id: stem.clone(),
+                        status: None,
+                        path: path.clone(),
+                        usable: false,
+                    });
+            }
+            child = parent;
+        }
+    }
     problems.sort_by(|a, b| a.path.cmp(&b.path).then(a.problem.cmp(&b.problem)));
     Snapshot {
         usable,
         unavailable,
+        children,
         records,
         problems,
     }
@@ -309,9 +440,99 @@ fn dependency_cycles(snap: &Snapshot) -> Vec<Problem> {
     problems
 }
 
+fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
+    let docs = jig.join("docs");
+    let mut problems = Vec::new();
+    let metadata = match store::metadata_cause(&docs, true) {
+        Ok(Some(_)) => match fs::read_dir(&docs) {
+            Ok(entries) => entries,
+            Err(error) => {
+                problems.push(Problem::at(
+                    PathBuf::from(".jig/docs"),
+                    format!("cannot list directory: {error}"),
+                    "fix directory permissions",
+                ));
+                return problems;
+            }
+        },
+        Ok(None) => return problems,
+        Err(error) => {
+            problems.push(Problem::at(
+                PathBuf::from(".jig/docs"),
+                error,
+                "restore a real directory at this path or remove it",
+            ));
+            return problems;
+        }
+    };
+    let existing: BTreeSet<&str> = snap
+        .records
+        .iter()
+        .map(|rec| rec.issue.id.as_str())
+        .collect();
+    for entry in metadata {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                problems.push(Problem::at(
+                    PathBuf::from(".jig/docs"),
+                    format!("cannot list entry: {error}"),
+                    "fix directory permissions",
+                ));
+                continue;
+            }
+        };
+        let path = PathBuf::from(".jig/docs").join(entry.file_name());
+        let file_name = entry.file_name();
+        let name = match file_name.to_str() {
+            Some(name) => name,
+            None => {
+                problems.push(Problem::at(
+                    path,
+                    "name is not valid UTF-8",
+                    "rename it to the issue ID or remove it",
+                ));
+                continue;
+            }
+        };
+        let entry_metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                problems.push(Problem::at(
+                    path,
+                    format!("cannot inspect entry: {error}"),
+                    "rename it to the issue ID or remove it",
+                ));
+                continue;
+            }
+        };
+        if entry_metadata.file_type().is_symlink() {
+            problems.push(Problem::at(
+                path,
+                "must be a real directory (not a symbolic link)",
+                "rename it to the issue ID or remove it",
+            ));
+        } else if !entry_metadata.is_dir() {
+            problems.push(Problem::at(
+                path,
+                "entry is not a directory",
+                "rename it to the issue ID or remove it",
+            ));
+        } else if !existing.contains(name) {
+            problems.push(Problem::at(
+                path,
+                format!("no issue with id {name} exists"),
+                "rename it to the issue ID or remove it",
+            ));
+        }
+    }
+    problems
+}
+
 pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     let snap = scan(jig);
     let mut problems = snap.problems.clone();
+    problems.extend(issue_docs_problems(jig, &snap));
 
     let rel_mem = PathBuf::from(".jig/memory.md");
     match store::metadata_cause(&jig.join("memory.md"), false) {
@@ -424,6 +645,12 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     }
 
     let today = clock::today();
+    let field_problem_paths: BTreeSet<String> = snap
+        .records
+        .iter()
+        .filter(|child| !crate::domain::field_problems(&child.issue).is_empty())
+        .map(|child| child.path.display().to_string())
+        .collect();
     for rec in &snap.records {
         if !rec.usable {
             continue;
@@ -437,15 +664,26 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
         if !direct_ok {
             continue;
         }
-        if let Err(domain::Ineligible::Reference(reference)) =
-            domain::eligibility(&rec.issue, &today, false, |id| snap.resolve(id))
-            && !reference.starts_with("ancestor cycle")
-        {
-            problems.push(Problem::at(
-                rec.path.clone(),
-                format!("unresolved {reference}"),
-                "fix or restore the referenced issue; see the other reported problems",
-            ));
+        let eligibility = domain::eligibility(
+            &rec.issue,
+            &today,
+            |id| snap.resolve(id),
+            |id| snap.descendants(id),
+            |id| snap.unresolved_descendants(id),
+        );
+        if !eligibility.unresolved.is_empty() {
+            for reference in eligibility.unresolved {
+                if let crate::domain::Unresolved::Subtask { path } = &reference
+                    && field_problem_paths.contains(&path.display().to_string())
+                {
+                    continue;
+                }
+                problems.push(Problem::at(
+                    rec.path.clone(),
+                    format!("unresolved {reference}"),
+                    "fix or restore the referenced issue; see the other reported problems",
+                ));
+            }
         }
     }
 

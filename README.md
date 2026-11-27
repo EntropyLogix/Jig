@@ -47,9 +47,10 @@ jig remember build.cmd "cargo build --locked"
 jig recall                  # list remembered topics
 ```
 
-Files may be browsed and hand-edited directly; agents go through `jig` so that
-mutations are serialized by `.jig/.lock` and cross-directory moves are journaled
-through `.jig/.move` (a crashed move is finished on the next command).
+Files may be browsed and hand-edited directly; agents use `jig` for registry
+changes so that mutations are serialized by `.jig/.lock` and cross-directory
+moves are journaled through `.jig/.move` (a crashed move is finished on the
+next command). Agents write issue documents directly under `.jig/docs/ID/`.
 
 ## Command reference
 
@@ -85,6 +86,11 @@ read commands. `--` stops option parsing. `--body -` reads standard input;
 omitting `--body` never reads stdin. A bare six-hex suffix (`a3f8c1`) is
 accepted as shorthand for `B-a3f8c1`.
 
+Text `jig list` without arguments groups issues by status in the order `review`,
+`proposed`, `claimed`, `open`. A status, release, or chronological sort filter
+keeps the flat list format; `--status all` is flat too. JSON is always a flat
+array.
+
 `jig check` audits the registry and reports every problem in one run —
 unreadable issue files, name/ID mismatches, statuses in the wrong directory,
 duplicate IDs, conflict markers, missing blockers or ancestors, dependency
@@ -116,11 +122,16 @@ as an error.
 the marker and is allowed on a closed issue. Closed ancestors never defer
 their descendants.
 
-`jig add` creates a `proposed` issue — a contract draft, not work; agents add
-without `--approved`. A human moves it to `open` with `jig approve` (or
-`--approved` at creation), returns it with `jig revise --reason`, or rejects it
-with `jig close`. Work runs `open` → `claimed` (`jig claim`) → `review`
-(`jig review`, `jig rework` sends it back) → `closed`.
+`jig add` creates a `proposed` issue, which is the definition stage. Discussion
+and analysis are folded into its description as the contract changes, and long
+material belongs in its issue documents. Agents add without `--approved` and do
+not treat a proposal as work. A person moves it to `open` with `jig approve`
+(`--approved` starts there), which means the contract is agreed and can be
+implemented. `jig revise --reason` returns an open issue to definition, and
+`jig close` can reject it. Work runs `open` → `claimed` (`jig claim`) →
+`review` (`jig review`, `jig rework` sends it back) → `closed`.
+Approving, revising, returning for rework, and closing issues are human
+decisions unless a person explicitly instructs an agent for that issue.
 
 Use `jig list --sort oldest` or `jig list --sort newest` to order by creation
 date rather than priority. Unknown creation dates sort last in either
@@ -133,6 +144,64 @@ sets 2. `ready` and the default `list` order issues by priority.
 A file whose `priority` is missing, `null`, or outside 0–4 is invalid:
 `jig check` reports it, `ready`, `list`, and `tree` skip it with a warning,
 `show` and writes refuse it, and a person fixes the field by hand.
+
+## Issue documents
+
+Long analyses, measurements, implementation instructions, and review or audit
+reports for one issue live under `.jig/docs/ID/`. The directory follows the
+issue ID across status changes. People and agents write these document files
+directly, while `jig` does not create, edit, move, or remove them. The issue
+description keeps the current contract and can reference the documents that
+support it.
+
+For example:
+
+```text
+.jig/docs/B-a3f8c1/analysis.md
+.jig/docs/B-a3f8c1/review/round-1.md
+.jig/docs/B-a3f8c1/review/round-2.md
+```
+
+`jig show B-a3f8c1` always ends with its `Documents: .jig/docs/B-a3f8c1/`
+line. It adds `(none)` when the directory has no files, or indents the sorted
+file paths by two spaces. JSON `show` returns the directory in `docs_dir` and
+the files in `docs`. `jig check` reports a file directly under `.jig/docs/` or
+a directory that is not named after an existing issue.
+
+## Subtasks and dependencies
+
+Choose the relationship first. A part of an issue's work is a subtask created
+with `--parent`. Separate work that must happen first is a blocker added with
+`jig dep add ID BLOCKER`. A parent is absent from `ready` while any descendant
+is active, and returns after all subtasks close. A closed blocker stays in
+`depends_on` and stops blocking until it is reopened. `jig show ID` reports the
+same decision on its `Ready:` line.
+
+For a work breakdown, create the subtasks under the parent and express order
+inside that tree when one part must precede another:
+
+```sh
+parent=$(jig add "Implement renderer" --approved)
+first=$(jig add "Prepare data" --parent "$parent" --approved)
+second=$(jig add "Render data" --parent "$parent" --approved)
+jig dep add "$second" "$first"
+```
+
+For example, within the `B312` tree, `jig dep add B312.2 B312.1` records that
+subtask `B312.2` waits for `B312.1`.
+
+When an agent discovers separate prerequisite work, it creates the issue,
+adds the dependency, records a note, and releases its claim:
+
+```sh
+blocker=$(jig add "Fix prerequisite")
+jig dep add CURRENT "$blocker"
+jig note CURRENT "Blocked by prerequisite work"
+jig unclaim CURRENT
+```
+
+Use `jig dep rm ID BLOCKER` only to undo a dependency added by mistake, and
+leave a note explaining the correction.
 
 ## Releases
 

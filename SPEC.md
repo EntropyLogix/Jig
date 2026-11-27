@@ -62,7 +62,8 @@ contract and acceptance checks for v1.
   the newest claim by timestamp. When a conflict is present in the files,
   surface it for explicit resolution.
 - Humans may read and edit the Markdown directly, provided no one else is
-  writing the same issue at the time. Agents make changes through `jig`.
+  writing the same issue at the time. Agents make changes through `jig`,
+  except issue documents, which they write directly (see Issue Documents).
 
 ### Issue Workflow
 
@@ -71,6 +72,14 @@ contract and acceptance checks for v1.
   work. `add` creates a `proposed` issue, including subtasks created with
   `--parent`; `add --approved` creates it directly as `open`. Agents create
   issues without `--approved`; approving is a human action.
+- `proposed` is where an issue is defined. Discussion and analysis happen
+  while the issue is `proposed`; their outcome is folded into the
+  description, which states the current contract (problem, decisions,
+  scope, acceptance) and is rewritten as decisions change rather than
+  appended to. Agents may `update` the description and add issue documents
+  (see Issue Documents) while working on the definition with a person;
+  `claim` still refuses a `proposed` issue. `approve` means the contract is
+  agreed and the issue can be implemented.
 - Every issue has a priority from 0 (highest) to 4; there is no issue
   without a priority. `add` without `-p` sets 2. People set the intended
   priority with `update ID -p N`, typically when approving. `update -p`
@@ -83,14 +92,42 @@ contract and acceptance checks for v1.
   its subtree, and approving a parent does not approve its children.
 - `ready` shows only `open` issues that are not deferred and whose blockers
   are all closed. A missing blocker is not a closed blocker. `depends_on`
-  records blockers on the waiting issue; `dep add` rejects cycles. Parenthood
-  alone is not a dependency. Deferring a parent hides the entire subtree
+  records blockers on the waiting issue; `dep add` rejects cycles. A
+  closed blocker stays in `depends_on`: it no longer blocks, and blocks
+  again if it is reopened. `dep rm` removes a link that was added by
+  mistake. A parent is not ready while any of its descendants is active
+  (`proposed`, `open`, `claimed`, or `review`); this is derived from the
+  tree and adds nothing to `depends_on`. Subtasks are the parts of the
+  parent's scope, and the parent returns to `ready` for the final check
+  once they are closed. Deferring a parent hides the entire subtree
   without editing the children; their own blockers and deferrals still apply.
 - An issue whose blocker or ancestor is missing or unreadable is not ready.
-  `ready` skips it, still lists every other eligible issue, prints one
+  The same holds for an issue with an unusable descendant: a file whose
+  `parent` field places it under the issue or, when the file cannot be
+  parsed, whose dotted ID in the file name does. `ready` skips such an
+  issue, still lists every other eligible issue, prints one
   warning per skipped issue to stderr naming the unresolved reference and
   pointing to `jig check`, and exits 0. JSON on stdout keeps its normal
-  shape. `claim` of such an issue fails as before.
+  shape. `claim` of such an issue fails as before, naming the unusable
+  file; `--force` does not bypass it.
+- Every refusal and every skip names its cause, so it never has to be
+  guessed: blocker IDs and active subtask IDs as separate lists, and the
+  path of an unusable file.
+- `show ID` states readiness without claiming, on a `Ready:` line just
+  before the `Documents:` line: `Ready: yes`, or `Ready: no — ` followed by
+  every reason, in this order and joined by `; `: `status S` when the
+  issue is not `open`, `deferred until DATE` (with `by ancestor ID` when
+  inherited), `unresolved REF` for a missing or unusable blocker, ancestor,
+  or descendant (followed once by a pointer to `jig check`), where REF
+  names the role and the cause: `blocker ID (missing)`, `ancestor ID
+  (missing)`, `blocker ID (unusable PATH)`, `ancestor ID (unusable PATH)`,
+  or `subtask PATH (unusable)`, with PATH relative to the project root;
+  JSON `unresolved` carries the same REF strings,
+  `blocked by IDS`, and `waiting for subtasks IDS`. `ready`, `claim`, and
+  `show` derive this from one rule, and `claim` refuses with the same
+  reasons. JSON `show` adds `readiness`: `{ready, deferred_until,
+  deferred_by, unresolved, blockers, subtasks}` with `null` or `[]` where a
+  reason is absent.
 - `list` and `tree` never fail as a whole because of one bad issue file
   (unreadable, conflicted, duplicated, or in the wrong directory). They
   list every readable issue, print one warning per skipped file to stderr
@@ -105,13 +142,14 @@ contract and acceptance checks for v1.
   Do not infer a label from the account or machine. `ready` and `show` never
   reserve work. Agents read the issue and start work only after `claim`
   succeeds. There is no separate read receipt.
-- `claim ID --force` bypasses only existing unfinished blockers (any active
-  status: `proposed`, `open`, `claimed`, or `review`), not the issue's own
+- `claim ID --force` bypasses only existing unfinished blockers and active
+  descendants (any active status: `proposed`, `open`, `claimed`, or
+  `review`), not the issue's own
   `proposed` status, deferral, malformed or missing dependencies, or a
   claim held by someone else. It
   does not change dependencies or make the issue appear in `ready`. It
   records one short history entry with the time, supplied assignee (if any),
-  and bypassed blocker IDs. No `--reason` is required. Agents use `--force`
+  and bypassed blocker and subtask IDs. No `--reason` is required. Agents use `--force`
   only at a person's explicit instruction for that issue.
 - `unclaim` releases a `claimed` issue back to `open`. `review` submits
   the work for verification, preserves the assignment, and does not unblock
@@ -173,6 +211,33 @@ contract and acceptance checks for v1.
   The limit does not affect imported text or the total size of an issue.
   Notes do not change status and are not duplicated in history.
 
+### Issue Documents
+
+- Long material that belongs to one issue — analyses, review or audit
+  reports, measurements, instructions for an implementer — lives in
+  `.jig/docs/ID/`, where `ID` is the issue ID (dotted subtask IDs
+  included). Any files and subdirectories may be stored there; Markdown is
+  the convention. The description references the documents that matter;
+  it stays the contract.
+- `jig` has no command that creates, edits, or removes documents; people
+  and agents write the files directly. `init` does not create `docs/`, and
+  a missing `docs/` is not a problem.
+- The directory belongs to the ID, not to a status: closing, reopening,
+  and every other transition leave `.jig/docs/ID/` where it is.
+- `show ID` ends with a `Documents: .jig/docs/ID/` line naming the
+  directory even when it does not exist yet, followed by the regular files
+  under it, recursively, as paths relative to the project root (for example
+  `.jig/docs/B312/analysis.md`), sorted, or by `(none)` on the same line
+  when there are none. It does not print their contents. JSON adds
+  `docs_dir` (the directory path) and `docs`, an array of the file paths
+  (`[]` when there are none).
+- A broken document location never hides the issue. When `.jig/docs` or
+  `.jig/docs/ID` is not a real directory, or part of it cannot be read,
+  `show` still prints the issue and its `Documents:` line (JSON with the
+  files it could list), warns on stderr with the path relative to the
+  project root and a pointer to `jig check`, and exits 0. `check` reports
+  the location.
+
 ### Agent Context And Project Memory
 
 - `start` gives short workflow instructions. `ready`, `list`, and `tree`
@@ -220,11 +285,23 @@ contract and acceptance checks for v1.
     reads one issue; an issue authorizes only its described scope;
   - claim before working with `jig claim ID --by NAME` using the agent's
     name; `--force` only on a person's explicit instruction for that issue;
-  - submit with `jig review ID --summary TEXT`; approving, revising, and
-    closing are for people unless a person explicitly says otherwise for
-    that issue;
+  - submit with `jig review ID --summary TEXT`; approving, revising,
+    returning for rework, and closing are for people unless a person
+    explicitly says otherwise for that issue;
   - work found along the way becomes `jig add TITLE --body TEXT` (a
     proposal, not work) plus a `jig note` on the issue where it was found;
+  - the issue description is the current contract: rewrite it with
+    `jig update ID --body -` as decisions change instead of appending, and
+    write long analyses and reports directly in the `Documents:` directory
+    from `jig show ID`, not in other directories;
+  - a part of an issue's work becomes a subtask (`jig add TITLE --parent ID
+    --body TEXT`), separate work that must happen first becomes a blocker
+    (`jig dep add`); a parent is ready only after its subtasks close; `jig dep add ID BLOCKER`
+    means ID waits for BLOCKER, and a closed blocker stops blocking without
+    removing the link; when the agent's issue needs other work first, it
+    adds that work as a subtask or as a blocker, leaves a `jig note`, and
+    runs `jig unclaim ID`; it removes a dependency with `jig dep rm` only to
+    undo its own mistake, with a `jig note`;
   - when stopping before the work is done, leave a `jig note` and run
     `jig unclaim ID` if the agent will not continue;
   - read project facts with `jig recall [TOPIC]`, record durable project
@@ -244,7 +321,9 @@ contract and acceptance checks for v1.
   `open` issue with `claim_id` or `assignee`, a `claimed` issue without
   `claim_id`, or `closed_at`, `release`, or a closing summary on an active
   issue), a pending or mismatched move record, an unreadable `memory.md`,
-  unexpected files in `open/` or `closed/`, and the legacy
+  unexpected files in `open/` or `closed/`, an entry in `.jig/docs/` that
+  is not a directory or is not named after an existing issue ID (hint:
+  rename it to the issue ID or remove it), and the legacy
   `/.*.tmp-*` rule in `.jig/.gitignore`.
 - Unknown legacy metadata is not a problem: a `closed` issue may have
   `closed_at: null`, and an issue in `review` may have no `assignee` or
@@ -257,6 +336,53 @@ contract and acceptance checks for v1.
   move; every resolution is an explicit human decision. Agents run `check`
   when `ready` warns and report the result to a person instead of removing
   dependencies or editing files to get unblocked.
+
+### MCP Server
+
+- `jig mcp` is a Model Context Protocol server over stdio in the same
+  binary. The client starts it and ends it with the session; there is no
+  daemon, port, or background service. It is optional and meant for
+  agents without a shell or for clients where a person approves tool calls;
+  an agent with a shell works through the CLI, the `AGENTS.md` block, and
+  the hooks, which cost less context than tool schemas.
+- The server finds the registry exactly like the CLI, by walking up from
+  its working directory, on every tool call. It does not use MCP roots and
+  takes no project argument; the client starts it in the project. It keeps
+  no registry state between calls: each call reads the files again and
+  takes `.lock` like the CLI, so CLI use, hand edits, and other servers on
+  the same registry are seen immediately.
+- Every command except `mcp` itself, `--help`, and `--version` is a tool
+  with the command's name (`dep add` and `dep rm` become `dep_add` and
+  `dep_rm`), including `init` and `start`. Tool arguments are typed JSON
+  fields mirroring the command's arguments and options (`body` is the text
+  itself; there is no stdin). A tool call runs the same command code as
+  the CLI: validation, refusals, messages, and effects are identical, and
+  a text value that looks like an option (a title `--force`) is still
+  text. The result is one text content item: for read tools the CLI's
+  `--json` output, for write tools the CLI's stdout. Warnings the CLI
+  prints on stderr are appended to the result text. A refused or failed
+  command returns `isError: true` with the CLI's error message; JSON-RPC
+  errors are reserved for protocol faults (malformed message, unknown
+  method or tool).
+- Read tools (`ready`, `show`, `list`, `tree`, `check`, `recall`, `start`)
+  carry `readOnlyHint: true`. The description of every tool for a person's
+  decision (`approve`, `revise`, `rework`, `close`, `reopen`, `release`,
+  `init`) starts with "A person's decision:". Jig enforces no permissions;
+  the client's per-tool approval is where a person confirms such a call.
+- The server implements MCP revision `2025-06-18` and answers
+  `initialize` with that `protocolVersion` whatever the client requested,
+  leaving the decision to the client as the protocol prescribes.
+  `initialize` returns as `instructions` the `jig start` workflow text
+  followed by one MCP-only paragraph: use these tools instead of running
+  `jig` in the shell, each tool mirrors the command of the same name, and a
+  person's refusal of a tool call is final and is not retried through the
+  shell. Only agents connected to the server see that paragraph; the
+  `AGENTS.md` block and `jig start` do not mention MCP. `initialize` also
+  returns `serverInfo` with name `jig` and the package version. The server answers
+  `ping`, accepts and ignores notifications it does not use, rejects
+  unknown methods with `-32601`, and writes nothing but JSON-RPC messages
+  to stdout. `init` does not register the server with any client; the
+  README shows the entries for Claude Code, Codex, and EntropyForge.
 
 ## File And CLI Details
 
@@ -286,7 +412,9 @@ contract and acceptance checks for v1.
   priority,assignee}`. `tree` returns a recursive `{id,title,status,children}`
   object. `show` returns the issue's metadata (excluding internal `claim_id`)
   and `body`, `history`, `notes`, and `closing_summary` as separate Markdown
-  values (`closing_summary` is `null` when absent). `start` returns
+  values (`closing_summary` is `null` when absent), plus `readiness` (see
+  Issue Workflow) and `docs_dir` and `docs` (see Issue Documents). `start`
+  returns
   `{workflow}`; `recall` returns an array of topic names or `{topic,value}`
   for one topic. Successful output goes to stdout; errors go to stderr
   with a nonzero exit code and no partial JSON.
@@ -295,6 +423,25 @@ contract and acceptance checks for v1.
   `.jig/`; they do not need to create or write `.jig/.lock`. Where they can
   write, the non-`check` read commands may finish an interrupted move as
   before; where they cannot, a pending move is reported as an error.
+- **Grouped lists.** Only `jig list` without arguments (apart from
+  `--json`) is an overview: its text output groups the active issues by
+  status in the order `review`, `proposed`, `claimed`, `open`, so the work
+  waiting for a person comes first. Each group starts with a `STATUS (N)`
+  header line, followed by its rows indented by two spaces, in the usual
+  `list` order. Empty groups are omitted; when nothing matches, the output
+  is empty. Any argument (`--status`, `--release`, `--sort`) makes it a
+  query with a flat list. A row has the same columns in both forms,
+  including the status. JSON is never grouped: it stays a flat array in
+  the usual order. `--status` takes one of `proposed`, `open`, `claimed`,
+  `review`, `closed`, or `all`; there is no `active` value, since the
+  default already shows the active issues.
+- **Help text.** `jig --help` groups commands by purpose (browsing,
+  creating and editing, agent work, human decisions, memory, setup),
+  indents commands by two spaces, and aligns descriptions in one column.
+  A command whose syntax does not fit puts its description on the next
+  line in that column. Options shared by several commands (`--json`,
+  `-p`/`--priority`, the status values, `--`) are explained once, not on
+  every command. No line is longer than 80 columns.
 - **Chronological lists.** `list --sort oldest|newest` sorts by `created_at`
   regardless of priority, keeping unknown dates last and breaking ties by ID.
   Text includes the stored date (`-` when missing); JSON changes only row
@@ -312,8 +459,9 @@ contract and acceptance checks for v1.
   standard file locking, with no extra locking dependency. Choose and
   approve any external argument, serialization, or hashing libraries before
   adding them. The only approved dependency is pinned `serde_json`
-  (`=1.0.154`, `arbitrary_precision`), used solely for editing agent
-  configuration during `init`; its license texts live in `licenses/`.
+  (`=1.0.154`, `arbitrary_precision`), used for editing agent
+  configuration during `init` and for JSON-RPC messages in `jig mcp`; its
+  license texts live in `licenses/`.
 
 ## Acceptance Checks
 
@@ -355,7 +503,46 @@ contract and acceptance checks for v1.
   `reopen` clears `release` with the former value in history. `list
   --release 1.0` lists exactly the stamped issues. `check` reports
   `release` on an active issue and a file without the `release` key.
+- A parent with an active subtask is absent from `ready` and refused by
+  `claim`; `claim --force` takes it and names the bypassed subtasks in
+  history. Once every subtask is closed, the parent is ready. A closed
+  blocker keeps its `depends_on` link; reopening it blocks the dependent
+  again. The refusal, the forced-claim history entry, and `show` list
+  blockers and subtasks separately.
+- A parent whose subtask file is unusable (an invalid field, and
+  separately a file that cannot be parsed) is skipped by `ready` with a
+  warning naming the file, refused by `claim` also with `--force`, and
+  shown by `show` as `Ready: no — unresolved …`.
+- `show` gives `Ready: yes` for a ready issue and, for one issue that is
+  deferred, blocked, and waiting for a subtask at once, `Ready: no` with all
+  three reasons in the agreed order; JSON `readiness` carries the same.
+- `show` of an issue without documents prints `Documents: .jig/docs/ID/
+  (none)` and JSON `docs: []` with `docs_dir`. Put files, including one in
+  a subdirectory, in `.jig/docs/ID/`: `show` lists their paths in text and
+  in JSON `docs`; `close` and `reopen` leave
+  them in place. A directory in `.jig/docs/` named after no issue and a
+  plain file directly in `.jig/docs/` are reported by `check`; a registry
+  without `docs/` is clean. With `.jig/docs/ID` replaced by a file, `show`
+  prints the issue, warns with the relative path, and exits 0.
+- With issues in every status, `list` prints the non-empty groups in the
+  order `review`, `proposed`, `claimed`, `open` with counts and rows in the
+  flat-list format; `list --status all`, `--status open`, `--release`, and
+  `--sort` print flat lists; `--status active` is rejected; JSON output is
+  the same flat array as before.
+- `jig --help` names every command, has no line longer than 80 columns,
+  and indents every command line.
 - Seed one instance of every `check` problem: a single `check` run reports
   all of them with hints and changes no byte in the registry.
 - Remove write access from a freshly cloned registry without `.lock`: all
   read commands succeed.
+- `jig mcp` started in a subdirectory of a project completes `initialize`
+  with `instructions` equal to the `jig start` text plus the MCP paragraph;
+  the `AGENTS.md` block and `jig start` contain no mention of MCP. `tools/list` names exactly
+  the commands of the dispatcher (minus `mcp`, plus `dep_add`/`dep_rm`),
+  read tools carry `readOnlyHint`, and the decision tools' descriptions
+  start with "A person's decision:". For every tool, a scripted call gives
+  the same result text and the same registry bytes as the CLI on an
+  identical registry, including a refusal (`isError`) and a warning. A
+  title `--force` stays a title. A CLI change made between two tool calls
+  is seen by the second. stdout carries only JSON-RPC; `ping` is answered
+  and an unknown method gets `-32601`.
