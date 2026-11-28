@@ -481,6 +481,18 @@ contract and acceptance checks for v1.
   regardless of priority, keeping unknown dates last and breaking ties by ID.
   Text includes the stored date (`-` when missing); JSON changes only row
   order. Default `list` and `ready` ordering are unchanged.
+- **Markdown snapshot.** `list --markdown FILE` takes the same filters and
+  order as `list` and writes one Markdown document for people to read: a
+  title, a line saying when `blt list` generated it and that issues are
+  edited with `blt`, a contents list of `ID [status] title`, and then each
+  issue as `## ID. Title` with a line of its status, priority, assignee,
+  parent, dependencies, deferral, and release, followed by its description
+  with Markdown headings outside code fences lowered by one level. History,
+  notes, and closing summaries are left out. Standard output is only
+  `wrote N issues to FILE`, so running it costs an agent one line. The file
+  is written atomically relative to the working directory; a missing
+  directory is an error, a FILE inside `.blt/` is refused, and `--json` is
+  refused with it. The MCP server does not offer the option.
 - **Interrupted file moves.** Stage a local, unversioned move record under
   the registry lock before changing directories. Finish the same operation
   on the next invocation after an interruption. If the files no longer
@@ -569,6 +581,10 @@ contract and acceptance checks for v1.
   flat-list format; `list --status all`, `--status open`, `--release`, and
   `--sort` print flat lists; `--status active` is rejected; JSON output is
   the same flat array as before.
+- `list --markdown FILE` writes the filtered issues with their descriptions,
+  prints one line, leaves `.blt/` byte-for-byte, keeps code fences intact
+  while lowering description headings, and refuses a FILE inside `.blt/`,
+  `--json`, and a missing directory.
 - `blt --help` names every command, has no line longer than 80 columns,
   and indents every command line.
 - Seed one instance of every `check` problem: a single `check` run reports

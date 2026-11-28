@@ -83,7 +83,7 @@ if [ -n "$missing" ]; then
     echo "blt-crew needs on PATH:$missing"
     for tool in $missing; do
         case $tool in
-            blt) echo "  blt: cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.1" ;;
+            blt) echo "  blt: cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.2" ;;
             jq) echo "  jq: recent macOS ships /usr/bin/jq; otherwise brew install jq or apt install jq" ;;
             git) echo "  git: install it with your system's package manager" ;;
         esac

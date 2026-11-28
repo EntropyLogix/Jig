@@ -18,10 +18,10 @@ cargo install --path . --locked
 ```
 
 To install a tagged release from GitHub (once the owner has published the
-tag), for example `v1.0.1`:
+tag), for example `v1.0.2`:
 
 ```sh
-cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.1
+cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.2
 ```
 
 The `blt` binary lands on your Cargo `PATH` (usually `~/.cargo/bin`) and needs
@@ -162,7 +162,7 @@ blt start [--json|--hook-json]
 blt add TITLE [--approved] [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]
 blt ready [--json]
 blt show ID [--json]
-blt list [--status proposed|open|claimed|review|closed|all] [--release NAME] [--sort oldest|newest] [--json]
+blt list [--status proposed|open|claimed|review|closed|all] [--release NAME] [--sort oldest|newest] [--json | --markdown FILE]
 blt tree ID [--json]
 blt approve ID
 blt revise ID --reason TEXT
@@ -193,6 +193,18 @@ Text `blt list` without arguments groups issues by status in the order `review`,
 `proposed`, `claimed`, `open`. A status, release, or chronological sort filter
 keeps the flat list format; `--status all` is flat too. JSON is always a flat
 array.
+
+`blt list --markdown FILE` writes the same selection to FILE as one Markdown
+document for reading: a contents list followed by every issue with its status
+line and full description. It prints only `wrote N issues to FILE`, so an agent
+that runs it does not fill its context. The file is a snapshot; edit issues
+with `blt`. It cannot be written inside `.blt/`, and the MCP server does not
+offer it:
+
+```sh
+blt list --markdown ~/issues.md
+blt list --markdown ~/closed.md --status closed --sort newest
+```
 
 `blt check` audits the registry and reports every problem in one run —
 unreadable issue files, name/ID mismatches, statuses in the wrong directory,
