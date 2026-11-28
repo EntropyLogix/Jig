@@ -1,7 +1,7 @@
 ---
 name: billet-crew
-description: Runs one role of the billet-crew loop (architect, dev, audit, lead) for a Billet issue. Use only when the person invokes billet-crew explicitly.
-argument-hint: "architect ID | dev ID LABEL | audit ID LABEL [--cross-check] | lead ID"
+description: Runs one role of the billet-crew loop (architect, dev, audit) for a Billet issue. Use only when the person invokes billet-crew explicitly.
+argument-hint: "architect ID | dev ID LABEL | audit ID LABEL [--cross-check] | audit ID --lead"
 disable-model-invocation: true
 allowed-tools: Bash(~/.claude/skills/billet-crew/bin/crew:*)
 ---

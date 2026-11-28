@@ -5328,7 +5328,7 @@ fn crew_review_loop() {
         ("developer", "# Role: developer"),
         ("auditor", "# Role: auditor\n"),
         ("cross-check", "# Role: auditor, cross-check"),
-        ("lead", "# Role: review lead"),
+        ("lead", "# Role: lead auditor"),
         ("architect", "# Role: architect"),
     ];
     let only_role = |out: &str, role: &str| {
@@ -5349,7 +5349,8 @@ fn crew_review_loop() {
     crew_refused(&sub, &["dev", &id], "usage: crew dev ID LABEL");
     crew_refused(&sub, &["dev", &id, "bad label"], "invalid label");
     crew_refused(&sub, &["audit", &id, "a1"], "nothing to audit");
-    crew_refused(&sub, &["lead", &id], "is open");
+    crew_refused(&sub, &["audit", &id, "--lead"], "is open");
+    crew_refused(&sub, &["lead", &id], "unknown role");
     crew_refused(&sub, &["architect", &id], "already approved");
 
     let proposal = ok(&d, &["add", "Proposal"]).trim().to_string();
@@ -5433,7 +5434,7 @@ fn crew_review_loop() {
     );
     fs::remove_file(d.join("new.txt")).unwrap();
 
-    let out = crew_ok(&sub, &["lead", &id]);
+    let out = crew_ok(&sub, &["audit", &id, "--lead"]);
     only_role(&out, "lead");
     assert!(out.contains("Code:  matches the handoff"), "{out}");
     for report in ["audit-a1.md", "audit-a2.md"] {

@@ -13,7 +13,7 @@ usage() {
 Usage:
   crew dev ID LABEL                     developer: implement or fix the issue
   crew audit ID LABEL [--cross-check]   auditor: audit the current review round
-  crew lead ID                          review lead: merge the round into a decision
+  crew audit ID --lead                  lead auditor: merge the round into a decision
   crew architect ID                     architect: turn a proposal into a contract
   crew fingerprint                      print the code fingerprint for a handoff
 
@@ -268,10 +268,14 @@ role_dev() {
 }
 
 role_audit() {
+    if [ $# -eq 2 ] && [ "$2" = --lead ]; then
+        role_lead "$1"
+        return
+    fi
     cross=no
     [ $# -eq 3 ] && [ "$3" = --cross-check ] && cross=yes
     if [ $# -ne 2 ] && [ "$cross" = no ]; then
-        refuse "usage: crew audit ID LABEL [--cross-check]" "Give the auditor a label, e.g. codex-audit."
+        refuse "usage: crew audit ID LABEL [--cross-check] | crew audit ID --lead" "Give the auditor a label, e.g. codex-audit."
     fi
     LABEL=$2
     check_label "$LABEL"
@@ -322,7 +326,6 @@ role_audit() {
 }
 
 role_lead() {
-    [ $# -eq 1 ] || refuse "usage: crew lead ID"
     LABEL=lead
     load "$1"
     [ "$STATUS" = review ] ||
@@ -339,7 +342,7 @@ role_lead() {
     report_state=$(create audit.md "$REPORT")
     decision_state=$(create decision.md "$DECISION")
     lineage
-    header "review lead"
+    header "lead auditor"
     printf 'Code:  %s\n' "$(code_state)"
     printf 'Read:  blt show %s (the contract)\n' "$ID"
     print_architectures
@@ -412,10 +415,6 @@ case $command in
     audit)
         need
         role_audit "$@"
-        ;;
-    lead)
-        need
-        role_lead "$@"
         ;;
     architect)
         need

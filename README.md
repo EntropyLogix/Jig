@@ -375,7 +375,7 @@ review loop on top of Billet:
    `blt review`.
 3. Any number of auditors check the work independently, each writing its own
    report.
-4. A review lead merges the reports into one decision. On `blt rework` the
+4. A lead auditor merges the reports into one decision. On `blt rework` the
    developer works only from that decision, and the loop repeats.
 5. A person closes the issue.
 

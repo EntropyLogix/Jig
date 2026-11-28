@@ -2,7 +2,7 @@
 
 An optional review loop for coding agents on top of Billet. An architect turns
 a proposal into a contract, a developer implements it, one or more auditors
-check it independently, and a review lead merges their reports into the
+check it independently, and a lead auditor merges their reports into the
 single decision the developer works from. Billet itself is unchanged: crew
 uses statuses, the history, notes, and the issue's documents directory.
 
@@ -13,7 +13,7 @@ uses statuses, the history, notes, and the issue's documents directory.
 | 0 | optional: `/billet-crew architect ID` on a proposal, then `blt approve ID` | the contract, `architecture.md`, subtasks |
 | 1 | `/billet-crew dev ID claude-dev` | the issue is claimed, implemented, handed over with `blt review` |
 | 2 | `/billet-crew audit ID codex-1` (any number, in parallel) | `audit-codex-1.md` |
-| 3 | `/billet-crew lead ID` (interactive) | `audit-lead.md`, `decision.md` |
+| 3 | `/billet-crew audit ID --lead` (interactive) | `audit-lead.md`, `decision.md` |
 | 3a | optional: `/billet-crew audit ID claude-2 --cross-check` | a report on the lead's decision |
 | 4 | the lead runs `blt rework ID` | back to step 1; the developer reads only `decision.md` |
 | 5 | the person runs `blt close ID --reason ...` | done |
@@ -35,10 +35,10 @@ frozen: the developer records a fingerprint of the working tree in the
 handoff, and auditors and the lead are warned when the code no longer
 matches it.
 
-Labels name agents (`claude-dev`, `codex-1`). They are required by crew
-and map to Billet's `claim --by`; `lead` and `architect` are fixed labels of
-their roles. Invoking the lead for an issue is the person's permission for that one
-`blt rework`; closing an issue is always the person's decision.
+Labels name agents (`claude-dev`, `codex-1`). They are required by crew and
+map to Billet's `claim --by`; `lead` and `architect` are fixed labels of
+their roles. Invoking the lead for an issue is the person's permission for
+that one `blt rework`; closing an issue is always the person's decision.
 
 Instructions are in English. Agents talk to the person, and write their
 documents, in the person's language.
@@ -72,4 +72,5 @@ explicitly (`disable-model-invocation` for Claude Code,
 - `templates/`: `architecture.md`, `handoff.md`, `audit.md`, `decision.md`.
 
 `bin/crew` can also be run directly: `crew architect ID`, `crew dev ID LABEL`,
-`crew audit ID LABEL [--cross-check]`, `crew lead ID`, `crew fingerprint`.
+`crew audit ID LABEL [--cross-check]`, `crew audit ID --lead`,
+`crew fingerprint`.
