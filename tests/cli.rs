@@ -5106,3 +5106,95 @@ fn crew_review_loop() {
         "{out}"
     );
 }
+
+#[test]
+fn crew_install_and_uninstall() {
+    let home = dir("crewhome");
+    let custom = dir("crewclaude");
+    let bin = Path::new(env!("CARGO_BIN_EXE_jig")).parent().unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("crew");
+    let install = |args: &[&str], claude_dir: Option<&Path>| {
+        let mut command = Command::new(source.join("install.sh"));
+        command
+            .args(args)
+            .env("HOME", &*home)
+            .env("PATH", &path)
+            .env_remove("CLAUDE_CONFIG_DIR");
+        if let Some(claude_dir) = claude_dir {
+            command.env("CLAUDE_CONFIG_DIR", claude_dir);
+        }
+        command.output().unwrap()
+    };
+    let claude = home.join(".claude/skills/jig-crew");
+    let codex = home.join(".agents/skills/jig-crew");
+
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(codex.join("notes.md"), "mine\n").unwrap();
+    let refused = install(&[], None);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&refused.stdout).contains("not a jig-crew skill"));
+    assert!(codex.join("notes.md").is_file());
+    fs::remove_dir_all(&codex).unwrap();
+
+    std::os::unix::fs::symlink(&source, &codex).unwrap();
+    let o = install(&[], None);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+    for skill in [&claude, &codex] {
+        assert!(
+            !fs::symlink_metadata(skill)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        for file in [
+            "SKILL.md",
+            "agents/openai.yaml",
+            "bin/crew",
+            "roles/common.md",
+            "roles/auditing.md",
+            "roles/dev.md",
+            "roles/audit.md",
+            "roles/cross-check.md",
+            "roles/lead.md",
+            "templates/handoff.md",
+            "templates/audit.md",
+            "templates/decision.md",
+        ] {
+            assert!(
+                skill.join(file).is_file(),
+                "{} lacks {file}",
+                skill.display()
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+            fs::read_to_string(source.join("SKILL.md")).unwrap()
+        );
+        let usage = Command::new(skill.join("bin/crew")).output().unwrap();
+        assert!(String::from_utf8_lossy(&usage.stdout).contains("crew dev ID LABEL"));
+    }
+    assert!(
+        source.join("SKILL.md").is_file(),
+        "the source checkout survives"
+    );
+
+    let o = install(&["--claude"], Some(&custom));
+    assert!(o.status.success());
+    let skill = fs::read_to_string(custom.join("skills/jig-crew/SKILL.md")).unwrap();
+    let crew_path = format!("{}/skills/jig-crew/bin/crew", custom.display());
+    assert!(
+        skill.contains(&format!("allowed-tools: Bash({crew_path}:*)")),
+        "{skill}"
+    );
+    assert!(
+        skill.contains(&format!("!`{crew_path} $ARGUMENTS")),
+        "{skill}"
+    );
+    assert!(!skill.contains("~/.claude/skills"), "{skill}");
+
+    let o = install(&["--uninstall"], None);
+    assert!(o.status.success());
+    assert!(!claude.exists() && !codex.exists());
+    assert_eq!(install(&["--bogus"], None).status.code(), Some(1));
+}

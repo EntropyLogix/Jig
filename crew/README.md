@@ -36,14 +36,19 @@ documents, in the person's language.
 
 ## Install
 
-Requirements: `jig`, `git`, `jq`, and a POSIX shell.
+Requirements: `jig`, `git`, `jq`, and a POSIX shell. The installer checks
+them and says how to get a missing one; it installs nothing else.
 
 ```sh
-ln -s "$PWD/crew" ~/.claude/skills/jig-crew   # Claude Code
-ln -s "$PWD/crew" ~/.agents/skills/jig-crew   # Codex
+crew/install.sh              # Claude Code and Codex
+crew/install.sh --claude     # only Claude Code
+crew/install.sh --codex      # only Codex
+crew/install.sh --uninstall  # remove (combine with --claude or --codex)
 ```
 
-Run from a checkout of this repository. The skill runs only when invoked
+The skill is copied to `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/jig-crew`
+and `~/.agents/skills/jig-crew`; rerun the installer after updating the
+checkout. It touches no settings or hooks. The skill runs only when invoked
 explicitly (`disable-model-invocation` for Claude Code,
 `agents/openai.yaml` for Codex).
 
