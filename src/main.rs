@@ -9,6 +9,13 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if args.len() == 1 && args[0] == "mcp" {
+        if let Err(error) = jig::mcp::serve(&cwd) {
+            eprintln!("jig: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     match jig::commands::run(&args, &cwd) {
         Ok(out) => {
             for warning in &out.warnings {

@@ -1,4 +1,5 @@
 mod check;
+pub use check::{ProblemKind, problem_kinds};
 pub mod clock;
 pub mod commands;
 mod domain;
@@ -6,5 +7,7 @@ pub mod ident;
 mod instructions;
 mod integration;
 pub mod issue;
+pub mod mcp;
 pub mod memory;
 pub mod store;
+pub mod text;

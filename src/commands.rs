@@ -7,6 +7,7 @@ use crate::integration;
 use crate::issue::{self, Issue, Status};
 use crate::memory;
 use crate::store::{self, Loaded, Place};
+use crate::text::TextKind;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -33,50 +34,464 @@ fn usage(msg: impl Into<String>) -> Fail {
     }
 }
 
-const HELP: &str = concat!(
-    "Jig - file-based issue tracker and project memory\n\n",
-    "Usage: jig [--json] COMMAND [ARGS]\n\n",
-    "Browse\n",
-    "  list [--status S] [--release NAME] [--sort oldest|newest]\n",
-    "                                  issues grouped by status (default)\n",
-    "  show ID                         one full issue and its documents\n",
-    "  tree ID                         issue with its subtasks\n",
-    "  ready                           open, unblocked work for agents\n\n",
-    "Create and edit\n",
-    "  add TITLE [--approved] [-p N] [--body TEXT|-] [--parent ID] [--dep ID...]\n",
-    "                                  new issue (proposed unless --approved)\n",
-    "  update ID [--title T] [-p N] [--body TEXT|-] [--release NAME]\n",
-    "                                  change the given fields\n",
-    "  note ID TEXT [--by NAME]        one-line note\n",
-    "  dep add|rm ID BLOCKER           manage blockers\n",
-    "  defer ID --until YYYY-MM-DD | --clear\n",
-    "                                  hide an issue until a date\n\n",
-    "Work (agents)\n",
-    "  claim ID [--by NAME] [--force]  start work on an open issue\n",
-    "  unclaim ID                      give a claimed issue back\n",
-    "  review ID [--summary TEXT]      submit for review\n\n",
-    "Decide (people)\n",
-    "  approve ID                      proposed -> open\n",
-    "  revise ID --reason TEXT         open -> proposed\n",
-    "  rework ID --reason TEXT         review -> claimed\n",
-    "  close ID --reason TEXT [--summary TEXT]\n",
-    "                                  archive an issue\n",
-    "  reopen ID --reason TEXT         reactivate a closed issue\n",
-    "  release NAME                    seal closed issues with a release name\n\n",
-    "Memory\n",
-    "  remember TOPIC TEXT             record a project fact\n",
-    "  recall [TOPIC]                  read project facts\n\n",
-    "Setup\n",
-    "  init [--no-hooks]               create .jig/, AGENTS.md and project hooks\n",
-    "  start                           workflow summary for agents\n",
-    "  check                           report registry problems\n\n",
-    "Options\n",
-    "  --json             machine output for read commands\n",
-    "  -p, --priority N   0 (highest) to 4, default 2\n",
-    "  S                  proposed|open|claimed|review|closed|all\n",
-    "  --                 end of options; what follows is text\n",
-    "  --help, --version",
-);
+#[derive(Clone, Copy)]
+pub enum ArgType {
+    Text(TextKind),
+    Boolean,
+    Integer,
+    TextList(TextKind),
+    Enum(&'static [&'static str]),
+}
+
+#[derive(Clone, Copy)]
+pub struct ArgSpec {
+    pub name: &'static str,
+    pub kind: ArgType,
+    pub required: bool,
+    pub positional: bool,
+    pub cli: Option<&'static str>,
+    pub alias: Option<&'static str>,
+    pub mcp: bool,
+}
+
+impl ArgSpec {
+    pub fn field(&self) -> &'static str {
+        self.cli.unwrap_or(self.name)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HelpGroup {
+    Browse,
+    CreateAndEdit,
+    Work,
+    Decide,
+    Memory,
+    Setup,
+}
+
+impl HelpGroup {
+    const ALL: [HelpGroup; 6] = [
+        HelpGroup::Browse,
+        HelpGroup::CreateAndEdit,
+        HelpGroup::Work,
+        HelpGroup::Decide,
+        HelpGroup::Memory,
+        HelpGroup::Setup,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            HelpGroup::Browse => "Browse",
+            HelpGroup::CreateAndEdit => "Create and edit",
+            HelpGroup::Work => "Work (agents)",
+            HelpGroup::Decide => "Decide (people)",
+            HelpGroup::Memory => "Memory",
+            HelpGroup::Setup => "Setup",
+        }
+    }
+}
+
+pub struct CommandSpec {
+    pub name: &'static str,
+    pub group: HelpGroup,
+    pub syntax: &'static str,
+    pub description: &'static str,
+    pub args: &'static [ArgSpec],
+    pub handler: Handler,
+    pub decision: bool,
+    pub mcp: bool,
+}
+
+pub type Handler = fn(&[String], &Path, bool, bool) -> R<CommandOutput>;
+
+const EMPTY_ARGS: &[ArgSpec] = &[];
+const STATUS_VALUES: &[&str] = &["proposed", "open", "claimed", "review", "closed", "all"];
+const SORT_VALUES: &[&str] = &["oldest", "newest"];
+const DEP_ACTIONS: &[&str] = &["add", "rm"];
+
+const ARGS_INIT: &[ArgSpec] = &[ArgSpec {
+    name: "no_hooks",
+    kind: ArgType::Boolean,
+    required: false,
+    positional: false,
+    cli: Some("--no-hooks"),
+    alias: None,
+    mcp: true,
+}];
+const ARGS_START: &[ArgSpec] = &[ArgSpec {
+    name: "hook_json",
+    kind: ArgType::Boolean,
+    required: false,
+    positional: false,
+    cli: Some("--hook-json"),
+    alias: None,
+    mcp: false,
+}];
+const ARGS_ADD: &[ArgSpec] = &[
+    ArgSpec {
+        name: "title",
+        kind: ArgType::Text(TextKind::Label),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "approved",
+        kind: ArgType::Boolean,
+        required: false,
+        positional: false,
+        cli: Some("--approved"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "priority",
+        kind: ArgType::Integer,
+        required: false,
+        positional: false,
+        cli: Some("--priority"),
+        alias: Some("-p"),
+        mcp: true,
+    },
+    ArgSpec {
+        name: "body",
+        kind: ArgType::Text(TextKind::Body),
+        required: false,
+        positional: false,
+        cli: Some("--body"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "parent",
+        kind: ArgType::Text(TextKind::Id),
+        required: false,
+        positional: false,
+        cli: Some("--parent"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "dep",
+        kind: ArgType::TextList(TextKind::Id),
+        required: false,
+        positional: false,
+        cli: Some("--dep"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_SHOW: &[ArgSpec] = &[ArgSpec {
+    name: "id",
+    kind: ArgType::Text(TextKind::Id),
+    required: true,
+    positional: true,
+    cli: None,
+    alias: None,
+    mcp: true,
+}];
+const ARGS_RELEASE: &[ArgSpec] = &[ArgSpec {
+    name: "name",
+    kind: ArgType::Text(TextKind::Release),
+    required: true,
+    positional: true,
+    cli: None,
+    alias: None,
+    mcp: true,
+}];
+const ARGS_LIST: &[ArgSpec] = &[
+    ArgSpec {
+        name: "status",
+        kind: ArgType::Enum(STATUS_VALUES),
+        required: false,
+        positional: false,
+        cli: Some("--status"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "release",
+        kind: ArgType::Text(TextKind::Release),
+        required: false,
+        positional: false,
+        cli: Some("--release"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "sort",
+        kind: ArgType::Enum(SORT_VALUES),
+        required: false,
+        positional: false,
+        cli: Some("--sort"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_CLAIM: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "by",
+        kind: ArgType::Text(TextKind::Label),
+        required: false,
+        positional: false,
+        cli: Some("--by"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "force",
+        kind: ArgType::Boolean,
+        required: false,
+        positional: false,
+        cli: Some("--force"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_UPDATE: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "title",
+        kind: ArgType::Text(TextKind::Label),
+        required: false,
+        positional: false,
+        cli: Some("--title"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "priority",
+        kind: ArgType::Integer,
+        required: false,
+        positional: false,
+        cli: Some("--priority"),
+        alias: Some("-p"),
+        mcp: true,
+    },
+    ArgSpec {
+        name: "body",
+        kind: ArgType::Text(TextKind::Body),
+        required: false,
+        positional: false,
+        cli: Some("--body"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "release",
+        kind: ArgType::Text(TextKind::Release),
+        required: false,
+        positional: false,
+        cli: Some("--release"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_REVIEW: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "summary",
+        kind: ArgType::Text(TextKind::Multiline),
+        required: false,
+        positional: false,
+        cli: Some("--summary"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_REASON: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "reason",
+        kind: ArgType::Text(TextKind::Multiline),
+        required: true,
+        positional: false,
+        cli: Some("--reason"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_CLOSE: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "reason",
+        kind: ArgType::Text(TextKind::Multiline),
+        required: true,
+        positional: false,
+        cli: Some("--reason"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "summary",
+        kind: ArgType::Text(TextKind::Multiline),
+        required: false,
+        positional: false,
+        cli: Some("--summary"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_DEP: &[ArgSpec] = &[
+    ArgSpec {
+        name: "action",
+        kind: ArgType::Enum(DEP_ACTIONS),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "blocker",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_NOTE: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "text",
+        kind: ArgType::Text(TextKind::Note),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "by",
+        kind: ArgType::Text(TextKind::Label),
+        required: false,
+        positional: false,
+        cli: Some("--by"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_DEFER: &[ArgSpec] = &[
+    ArgSpec {
+        name: "id",
+        kind: ArgType::Text(TextKind::Id),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "until",
+        kind: ArgType::Text(TextKind::Date),
+        required: false,
+        positional: false,
+        cli: Some("--until"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "clear",
+        kind: ArgType::Boolean,
+        required: false,
+        positional: false,
+        cli: Some("--clear"),
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_REMEMBER: &[ArgSpec] = &[
+    ArgSpec {
+        name: "topic",
+        kind: ArgType::Text(TextKind::Topic),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "text",
+        kind: ArgType::Text(TextKind::Free),
+        required: true,
+        positional: true,
+        cli: None,
+        alias: None,
+        mcp: true,
+    },
+];
+const ARGS_RECALL: &[ArgSpec] = &[ArgSpec {
+    name: "topic",
+    kind: ArgType::Text(TextKind::Free),
+    required: false,
+    positional: true,
+    cli: None,
+    alias: None,
+    mcp: true,
+}];
 
 struct Parsed {
     pos: Vec<String>,
@@ -140,8 +555,9 @@ fn parse_tail(args: &[String], spec: &[(&str, Arity, &str)], repeat: &[&str]) ->
                     }
                     let mut taken = 0usize;
                     while i < args.len()
-                        && args[i] != "--"
-                        && !(args[i].len() > 1 && args[i].starts_with('-'))
+                        && (taken == 0
+                            || (args[i] != "--"
+                                && !(args[i].len() > 1 && args[i].starts_with('-'))))
                     {
                         entry.push(args[i].clone());
                         taken += 1;
@@ -160,6 +576,63 @@ fn parse_tail(args: &[String], spec: &[(&str, Arity, &str)], repeat: &[&str]) ->
         i += 1;
     }
     Ok(p)
+}
+
+fn parse_command_tail(args: &[String], name: &str) -> R<Parsed> {
+    let command = COMMANDS
+        .iter()
+        .find(|spec| spec.name == name)
+        .ok_or_else(|| usage(format!("unknown command {name}")))?;
+    let mut spec = Vec::new();
+    let mut repeat = Vec::new();
+    if JSON_CMDS.contains(&name) {
+        spec.push(("--json", Arity::Switch, "json"));
+    }
+    for arg in command.args {
+        let Some(option) = arg.cli else {
+            continue;
+        };
+        let arity = match arg.kind {
+            ArgType::Boolean => Arity::Switch,
+            ArgType::TextList(_) => {
+                repeat.push(arg.name);
+                Arity::Many
+            }
+            ArgType::Text(_) | ArgType::Integer | ArgType::Enum(_) => Arity::One,
+        };
+        spec.push((option, arity, arg.name));
+        if let Some(alias) = arg.alias {
+            spec.push((alias, arity, arg.name));
+        }
+    }
+    let parsed = parse_tail(args, &spec, &repeat)?;
+    check_text_args(command, &parsed)?;
+    Ok(parsed)
+}
+
+fn check_text_args(command: &CommandSpec, p: &Parsed) -> R<()> {
+    let positional: Vec<&ArgSpec> = command.args.iter().filter(|arg| arg.positional).collect();
+    let needed = positional.iter().filter(|arg| arg.required).count();
+    let fits = (needed..=positional.len()).contains(&p.pos.len());
+    for arg in command.args {
+        let (ArgType::Text(kind) | ArgType::TextList(kind)) = arg.kind else {
+            continue;
+        };
+        let values: Vec<&String> = if arg.positional {
+            let index = positional.iter().position(|other| other.name == arg.name);
+            match index.and_then(|index| p.pos.get(index)) {
+                Some(value) if fits => vec![value],
+                _ => Vec::new(),
+            }
+        } else {
+            p.opts.get(arg.name).into_iter().flatten().collect()
+        };
+        for value in values {
+            kind.check(arg.field(), arg.required, value)
+                .map_err(usage)?;
+        }
+    }
+    Ok(())
 }
 
 fn opt<'a>(p: &'a Parsed, name: &str) -> Option<&'a str> {
@@ -206,9 +679,13 @@ fn read_stdin() -> R<String> {
     Ok(s)
 }
 
-fn body_arg(p: &Parsed) -> R<Option<String>> {
+fn body_arg(p: &Parsed, allow_stdin: bool) -> R<Option<String>> {
     match opt(p, "body") {
-        Some("-") => Ok(Some(read_stdin()?)),
+        Some("-") if allow_stdin => {
+            let body = read_stdin()?;
+            TextKind::Body.check("body", false, &body).map_err(usage)?;
+            Ok(Some(body))
+        }
         Some(t) => Ok(Some(t.to_string())),
         None => Ok(None),
     }
@@ -237,16 +714,6 @@ fn hist_push(issue: &mut Issue, entry: String) {
 
 fn hist_entry(what: &str) -> String {
     format!("- {} {}", clock::now_stamp(), what)
-}
-
-fn validated_history_text<'a>(text: &'a str, option: &str) -> R<&'a str> {
-    if text.chars().any(|c| c != '\n' && c.is_control()) {
-        return Err(usage(format!(
-            "{option}: control characters other than newline are not allowed"
-        )));
-    }
-    issue::structural_check(text, option).map_err(usage)?;
-    Ok(text)
 }
 
 fn history_text(label: &str, text: &str) -> String {
@@ -340,63 +807,330 @@ impl CommandOutput {
     }
 }
 
-const JSON_CMDS: [&str; 7] = ["start", "ready", "show", "list", "tree", "recall", "check"];
+pub const JSON_CMDS: [&str; 7] = ["start", "ready", "show", "list", "tree", "recall", "check"];
 
-type Handler = fn(&[String], &Path, bool) -> R<CommandOutput>;
-
-const COMMANDS: &[(&str, Handler)] = &[
-    ("ready", cmd_ready),
-    ("check", cmd_check),
-    ("init", |a, c, _| cmd_init(a, c).map(CommandOutput::plain)),
-    ("start", |a, c, j| {
-        cmd_start(a, c, j).map(CommandOutput::plain)
-    }),
-    ("add", |a, c, _| cmd_add(a, c).map(CommandOutput::plain)),
-    ("show", cmd_show),
-    ("list", cmd_list),
-    ("tree", cmd_tree),
-    ("approve", |a, c, _| {
-        cmd_approve(a, c).map(CommandOutput::plain)
-    }),
-    ("revise", |a, c, _| {
-        cmd_revise(a, c).map(CommandOutput::plain)
-    }),
-    ("claim", |a, c, _| cmd_claim(a, c).map(CommandOutput::plain)),
-    ("unclaim", |a, c, _| {
-        cmd_unclaim(a, c).map(CommandOutput::plain)
-    }),
-    ("update", |a, c, _| {
-        cmd_update(a, c).map(CommandOutput::plain)
-    }),
-    ("review", |a, c, _| {
-        cmd_review(a, c).map(CommandOutput::plain)
-    }),
-    ("rework", |a, c, _| {
-        cmd_rework(a, c).map(CommandOutput::plain)
-    }),
-    ("close", |a, c, _| cmd_close(a, c).map(CommandOutput::plain)),
-    ("reopen", |a, c, _| {
-        cmd_reopen(a, c).map(CommandOutput::plain)
-    }),
-    ("release", |a, c, _| cmd_release(a, c)),
-    ("dep", |a, c, _| cmd_dep(a, c).map(CommandOutput::plain)),
-    ("note", |a, c, _| cmd_note(a, c).map(CommandOutput::plain)),
-    ("defer", |a, c, _| cmd_defer(a, c).map(CommandOutput::plain)),
-    ("remember", |a, c, _| {
-        cmd_remember(a, c).map(CommandOutput::plain)
-    }),
-    ("recall", |a, c, j| {
-        cmd_recall(a, c, j).map(CommandOutput::plain)
-    }),
+pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "list",
+        group: HelpGroup::Browse,
+        syntax: "list [--status S] [--release NAME] [--sort oldest|newest]",
+        description: "issues grouped by status (default)",
+        args: ARGS_LIST,
+        handler: handle_list,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "show",
+        group: HelpGroup::Browse,
+        syntax: "show ID",
+        description: "one full issue and its documents",
+        args: ARGS_SHOW,
+        handler: handle_show,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "tree",
+        group: HelpGroup::Browse,
+        syntax: "tree ID",
+        description: "issue with its subtasks",
+        args: ARGS_SHOW,
+        handler: handle_tree,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "ready",
+        group: HelpGroup::Browse,
+        syntax: "ready",
+        description: "open, unblocked work for agents",
+        args: EMPTY_ARGS,
+        handler: handle_ready,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "add",
+        group: HelpGroup::CreateAndEdit,
+        syntax: "add TITLE [--approved] [-p N] [--body TEXT|-] [--parent ID] [--dep ID...]",
+        description: "new issue (proposed unless --approved)",
+        args: ARGS_ADD,
+        handler: handle_add,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "update",
+        group: HelpGroup::CreateAndEdit,
+        syntax: "update ID [--title T] [-p N] [--body TEXT|-] [--release NAME]",
+        description: "change the given fields",
+        args: ARGS_UPDATE,
+        handler: handle_update,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "note",
+        group: HelpGroup::CreateAndEdit,
+        syntax: "note ID TEXT [--by NAME]",
+        description: "one-line note",
+        args: ARGS_NOTE,
+        handler: handle_note,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "dep",
+        group: HelpGroup::CreateAndEdit,
+        syntax: "dep add|rm ID BLOCKER",
+        description: "manage blockers",
+        args: ARGS_DEP,
+        handler: handle_dep,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "defer",
+        group: HelpGroup::CreateAndEdit,
+        syntax: "defer ID --until YYYY-MM-DD | --clear",
+        description: "hide an issue until a date",
+        args: ARGS_DEFER,
+        handler: handle_defer,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "claim",
+        group: HelpGroup::Work,
+        syntax: "claim ID [--by NAME] [--force]",
+        description: "start work on an open issue",
+        args: ARGS_CLAIM,
+        handler: handle_claim,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "unclaim",
+        group: HelpGroup::Work,
+        syntax: "unclaim ID",
+        description: "give a claimed issue back",
+        args: ARGS_SHOW,
+        handler: handle_unclaim,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "review",
+        group: HelpGroup::Work,
+        syntax: "review ID [--summary TEXT]",
+        description: "submit for review",
+        args: ARGS_REVIEW,
+        handler: handle_review,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "approve",
+        group: HelpGroup::Decide,
+        syntax: "approve ID",
+        description: "proposed -> open",
+        args: ARGS_SHOW,
+        handler: handle_approve,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "revise",
+        group: HelpGroup::Decide,
+        syntax: "revise ID --reason TEXT",
+        description: "open -> proposed",
+        args: ARGS_REASON,
+        handler: handle_revise,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "rework",
+        group: HelpGroup::Decide,
+        syntax: "rework ID --reason TEXT",
+        description: "review -> claimed",
+        args: ARGS_REASON,
+        handler: handle_rework,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "close",
+        group: HelpGroup::Decide,
+        syntax: "close ID --reason TEXT [--summary TEXT]",
+        description: "archive an issue",
+        args: ARGS_CLOSE,
+        handler: handle_close,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "reopen",
+        group: HelpGroup::Decide,
+        syntax: "reopen ID --reason TEXT",
+        description: "reactivate a closed issue",
+        args: ARGS_REASON,
+        handler: handle_reopen,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "release",
+        group: HelpGroup::Decide,
+        syntax: "release NAME",
+        description: "seal closed issues with a release name",
+        args: ARGS_RELEASE,
+        handler: handle_release,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "remember",
+        group: HelpGroup::Memory,
+        syntax: "remember TOPIC TEXT",
+        description: "record a project fact",
+        args: ARGS_REMEMBER,
+        handler: handle_remember,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "recall",
+        group: HelpGroup::Memory,
+        syntax: "recall [TOPIC]",
+        description: "read project facts",
+        args: ARGS_RECALL,
+        handler: handle_recall,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "init",
+        group: HelpGroup::Setup,
+        syntax: "init [--no-hooks]",
+        description: "create .jig/, AGENTS.md and project hooks",
+        args: ARGS_INIT,
+        handler: handle_init,
+        decision: true,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "start",
+        group: HelpGroup::Setup,
+        syntax: "start",
+        description: "workflow summary for agents",
+        args: ARGS_START,
+        handler: handle_start,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "check",
+        group: HelpGroup::Setup,
+        syntax: "check",
+        description: "report registry problems",
+        args: EMPTY_ARGS,
+        handler: handle_check,
+        decision: false,
+        mcp: true,
+    },
+    CommandSpec {
+        name: "mcp",
+        group: HelpGroup::Setup,
+        syntax: "mcp",
+        description: "MCP server over stdio (started by the client)",
+        args: EMPTY_ARGS,
+        handler: cmd_mcp,
+        decision: false,
+        mcp: false,
+    },
 ];
 
+pub(crate) struct McpToolSpec {
+    pub(crate) name: &'static str,
+    pub(crate) command: &'static CommandSpec,
+    pub(crate) action: Option<&'static str>,
+    pub(crate) description: &'static str,
+}
+
+pub(crate) fn mcp_tools() -> Vec<McpToolSpec> {
+    COMMANDS
+        .iter()
+        .filter(|spec| spec.mcp)
+        .flat_map(|spec| {
+            if spec.name == "dep" {
+                vec![
+                    McpToolSpec {
+                        name: "dep_add",
+                        command: spec,
+                        action: Some("add"),
+                        description: "add a blocker",
+                    },
+                    McpToolSpec {
+                        name: "dep_rm",
+                        command: spec,
+                        action: Some("rm"),
+                        description: "remove a blocker",
+                    },
+                ]
+            } else {
+                vec![McpToolSpec {
+                    name: spec.name,
+                    command: spec,
+                    action: None,
+                    description: spec.description,
+                }]
+            }
+        })
+        .collect()
+}
+
 pub fn command_names() -> impl Iterator<Item = &'static str> {
-    COMMANDS.iter().map(|(name, _)| *name)
+    COMMANDS.iter().map(|spec| spec.name)
+}
+
+fn help_text() -> String {
+    let mut out = String::from(
+        "Jig - file-based issue tracker and project memory\n\nUsage: jig [--json] COMMAND [ARGS]\n\n",
+    );
+    for (index, group) in HelpGroup::ALL.iter().enumerate() {
+        out.push_str(group.title());
+        out.push('\n');
+        for spec in COMMANDS.iter().filter(|spec| spec.group == *group) {
+            let line = format!("  {}", spec.syntax);
+            if line.len() <= 34 && line.len() + 2 + spec.description.len() <= 80 {
+                out.push_str(&format!("{line:<34}{}\n", spec.description));
+            } else {
+                out.push_str(&line);
+                out.push('\n');
+                out.push_str(&format!("{:34}{}\n", "", spec.description));
+            }
+        }
+        if index + 1 < HelpGroup::ALL.len() {
+            out.push('\n');
+        }
+    }
+    out.push_str("\nOptions\n  --json             machine output for read commands\n  -p, --priority N   0 (highest) to 4, default 2\n  S                  proposed|open|claimed|review|closed|all\n  --                 end of options; what follows is text\n  --help, --version");
+    out
 }
 
 pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
+    run_inner(args, cwd, true)
+}
+
+pub(crate) fn run_mcp(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
+    run_inner(args, cwd, false)
+}
+
+fn run_inner(args: &[String], cwd: &Path, allow_stdin: bool) -> Result<CommandOutput, Fail> {
     if args.is_empty() {
-        return Ok(CommandOutput::plain(format!("{HELP}\n")));
+        return Ok(CommandOutput::plain(format!("{}\n", help_text())));
     }
     let mut json = false;
     let mut i = 0usize;
@@ -405,6 +1139,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
             return Err(usage("missing command; try `jig --help`"));
         };
         match a.as_str() {
+            "--json" if json => return Err(usage("duplicate option --json")),
             "--json" => {
                 json = true;
                 i += 1;
@@ -416,7 +1151,9 @@ pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
                 };
                 break a.to_string();
             }
-            "--help" | "-h" | "help" => return Ok(CommandOutput::plain(format!("{HELP}\n"))),
+            "--help" | "-h" | "help" => {
+                return Ok(CommandOutput::plain(format!("{}\n", help_text())));
+            }
             "--version" => {
                 return Ok(CommandOutput::plain(format!(
                     "jig {}\n",
@@ -433,18 +1170,117 @@ pub fn run(args: &[String], cwd: &Path) -> Result<CommandOutput, Fail> {
     if json && !JSON_CMDS.contains(&cmd.as_str()) {
         return Err(usage(format!("--json is not valid for `{cmd}`")));
     }
-    let Some((_, handler)) = COMMANDS.iter().find(|(name, _)| *name == cmd) else {
+    let Some(spec) = COMMANDS.iter().find(|spec| spec.name == cmd) else {
         return Err(usage(format!("unknown command {cmd}; try `jig --help`")));
     };
-    handler(&tail, cwd, json)
+    (spec.handler)(&tail, cwd, json, allow_stdin)
+}
+
+fn handle_init(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_init(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_ready(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_ready(args, cwd, json)
+}
+
+fn handle_check(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_check(args, cwd, json)
+}
+
+fn handle_start(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_start(args, cwd, json).map(CommandOutput::plain)
+}
+
+fn handle_show(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_show(args, cwd, json)
+}
+
+fn handle_list(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_list(args, cwd, json)
+}
+
+fn handle_tree(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_tree(args, cwd, json)
+}
+
+fn handle_add(args: &[String], cwd: &Path, _: bool, allow_stdin: bool) -> R<CommandOutput> {
+    cmd_add(args, cwd, allow_stdin).map(CommandOutput::plain)
+}
+
+fn handle_approve(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_approve(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_revise(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_revise(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_claim(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_claim(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_unclaim(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_unclaim(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_update(args: &[String], cwd: &Path, _: bool, allow_stdin: bool) -> R<CommandOutput> {
+    cmd_update(args, cwd, allow_stdin).map(CommandOutput::plain)
+}
+
+fn handle_review(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_review(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_rework(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_rework(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_close(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_close(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_reopen(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_reopen(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_release(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_release(args, cwd)
+}
+
+fn handle_dep(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_dep(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_note(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_note(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_defer(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_defer(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_remember(args: &[String], cwd: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    cmd_remember(args, cwd).map(CommandOutput::plain)
+}
+
+fn handle_recall(args: &[String], cwd: &Path, json: bool, _: bool) -> R<CommandOutput> {
+    cmd_recall(args, cwd, json).map(CommandOutput::plain)
+}
+
+fn cmd_mcp(args: &[String], _: &Path, _: bool, _: bool) -> R<CommandOutput> {
+    if args.is_empty() {
+        return Err(usage("mcp is started by the client"));
+    }
+    Err(usage("mcp does not accept arguments"))
 }
 
 fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[("--no-hooks", Arity::Switch, "no-hooks")], &[])?;
+    let p = parse_command_tail(args, "init")?;
     pos_n(&p, 0, "no positional arguments")?;
     let created = store::init(cwd).map_err(fail)?;
     let _lock = registry(cwd)?;
-    let notice = integration::install(cwd, !flag(&p, "no-hooks")).map_err(fail)?;
+    let notice = integration::install(cwd, !flag(&p, "no_hooks")).map_err(fail)?;
     let mut out = if created {
         "initialized .jig/\n".to_string()
     } else {
@@ -458,17 +1294,10 @@ fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {
-    let p = parse_tail(
-        args,
-        &[
-            ("--json", Arity::Switch, "json"),
-            ("--hook-json", Arity::Switch, "hook-json"),
-        ],
-        &[],
-    )?;
+    let p = parse_command_tail(args, "start")?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
-    if flag(&p, "hook-json") {
+    if flag(&p, "hook_json") {
         if json {
             return Err(usage("--json and --hook-json are mutually exclusive"));
         }
@@ -488,29 +1317,15 @@ fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {
     })
 }
 
-fn cmd_add(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(
-        args,
-        &[
-            ("-p", Arity::One, "priority"),
-            ("--priority", Arity::One, "priority"),
-            ("--body", Arity::One, "body"),
-            ("--parent", Arity::One, "parent"),
-            ("--dep", Arity::Many, "dep"),
-            ("--approved", Arity::Switch, "approved"),
-        ],
-        &["dep"],
-    )?;
+fn cmd_add(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
+    let p = parse_command_tail(args, "add")?;
     pos_n(&p, 1, "add TITLE")?;
     let title = &p.pos[0];
-    if !issue::valid_label(title) {
-        return Err(usage("title must be a non-empty single line"));
-    }
     let priority = opt(&p, "priority")
         .map(parse_priority)
         .transpose()?
         .unwrap_or(2);
-    let body = body_arg(&p)?.unwrap_or_default();
+    let body = body_arg(&p, allow_stdin)?.unwrap_or_default();
     let lock = registry(cwd)?;
     let jig = lock.jig.clone();
     let parent = match opt(&p, "parent") {
@@ -638,7 +1453,7 @@ fn file_warnings(
 }
 
 fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
-    let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
+    let p = parse_command_tail(args, "ready")?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
@@ -692,7 +1507,7 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
 }
 
 fn cmd_check(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
-    let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
+    let p = parse_command_tail(args, "check")?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
     let jig = store::discover_raw(cwd).map_err(fail)?;
@@ -864,7 +1679,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
 }
 
 fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
-    let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
+    let p = parse_command_tail(args, "show")?;
     pos_n(&p, 1, "show ID")?;
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
@@ -995,26 +1810,10 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
 }
 
 fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
-    let p = parse_tail(
-        args,
-        &[
-            ("--json", Arity::Switch, "json"),
-            ("--status", Arity::One, "status"),
-            ("--release", Arity::One, "release"),
-            ("--sort", Arity::One, "sort"),
-        ],
-        &[],
-    )?;
+    let p = parse_command_tail(args, "list")?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
     let release = opt(&p, "release");
-    if let Some(name) = release
-        && !issue::valid_release(name)
-    {
-        return Err(usage(
-            "release must be a non-empty single line without surrounding whitespace",
-        ));
-    }
     if release.is_some()
         && let Some(status) = opt(&p, "status")
         && !matches!(status, "closed" | "all")
@@ -1131,7 +1930,7 @@ fn child_key(issue: &Issue) -> (u8, u64, String) {
 }
 
 fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
-    let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
+    let p = parse_command_tail(args, "tree")?;
     pos_n(&p, 1, "tree ID")?;
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
@@ -1207,20 +2006,8 @@ fn tree_text(
 }
 
 fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(
-        args,
-        &[
-            ("--by", Arity::One, "by"),
-            ("--force", Arity::Switch, "force"),
-        ],
-        &[],
-    )?;
+    let p = parse_command_tail(args, "claim")?;
     pos_n(&p, 1, "claim ID")?;
-    if let Some(b) = opt(&p, "by")
-        && !issue::valid_label(b)
-    {
-        return Err(usage("--by must be a non-empty single line"));
-    }
     let force = flag(&p, "force");
     let lock = registry(cwd)?;
     let jig = &lock.jig;
@@ -1293,7 +2080,7 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_approve(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[], &[])?;
+    let p = parse_command_tail(args, "approve")?;
     pos_n(&p, 1, "approve ID")?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
@@ -1306,12 +2093,9 @@ fn cmd_approve(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_revise(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[("--reason", Arity::One, "reason")], &[])?;
+    let p = parse_command_tail(args, "revise")?;
     pos_n(&p, 1, "revise ID")?;
-    let reason = opt(&p, "reason")
-        .filter(|r| !r.trim().is_empty())
-        .ok_or_else(|| usage("--reason is required"))?;
-    let reason = validated_history_text(reason, "--reason")?;
+    let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
     let mut i = l.issue.clone();
@@ -1323,7 +2107,7 @@ fn cmd_revise(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_unclaim(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[], &[])?;
+    let p = parse_command_tail(args, "unclaim")?;
     pos_n(&p, 1, "unclaim ID")?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
@@ -1336,18 +2120,8 @@ fn cmd_unclaim(args: &[String], cwd: &Path) -> R<String> {
     Ok(format!("unclaimed {}\n", i.id))
 }
 
-fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(
-        args,
-        &[
-            ("-p", Arity::One, "priority"),
-            ("--priority", Arity::One, "priority"),
-            ("--title", Arity::One, "title"),
-            ("--body", Arity::One, "body"),
-            ("--release", Arity::One, "release"),
-        ],
-        &[],
-    )?;
+fn cmd_update(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
+    let p = parse_command_tail(args, "update")?;
     pos_n(&p, 1, "update ID")?;
     if opt(&p, "title").is_none()
         && opt(&p, "priority").is_none()
@@ -1356,14 +2130,7 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
     {
         return Err(usage("update requires at least one change"));
     }
-    if let Some(release) = opt(&p, "release")
-        && !issue::valid_release(release)
-    {
-        return Err(usage(
-            "release must be a non-empty single line without surrounding whitespace",
-        ));
-    }
-    let body = body_arg(&p)?;
+    let body = body_arg(&p, allow_stdin)?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
     if opt(&p, "release").is_some() && l.issue.status != Status::Closed {
@@ -1371,9 +2138,6 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
     }
     let mut i = l.issue.clone();
     if let Some(t) = opt(&p, "title") {
-        if t.is_empty() {
-            return Err(usage("empty title"));
-        }
         i.title = t.to_string();
     }
     if let Some(v) = opt(&p, "priority") {
@@ -1400,11 +2164,9 @@ fn cmd_update(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[("--summary", Arity::One, "summary")], &[])?;
+    let p = parse_command_tail(args, "review")?;
     pos_n(&p, 1, "review ID")?;
-    let summary = opt(&p, "summary")
-        .map(|s| validated_history_text(s, "--summary"))
-        .transpose()?;
+    let summary = opt(&p, "summary");
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
     let mut i = l.issue.clone();
@@ -1426,12 +2188,9 @@ fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[("--reason", Arity::One, "reason")], &[])?;
+    let p = parse_command_tail(args, "rework")?;
     pos_n(&p, 1, "rework ID")?;
-    let reason = opt(&p, "reason")
-        .filter(|r| !r.trim().is_empty())
-        .ok_or_else(|| usage("--reason is required"))?;
-    let reason = validated_history_text(reason, "--reason")?;
+    let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
     let mut i = l.issue.clone();
@@ -1449,22 +2208,10 @@ fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(
-        args,
-        &[
-            ("--reason", Arity::One, "reason"),
-            ("--summary", Arity::One, "summary"),
-        ],
-        &[],
-    )?;
+    let p = parse_command_tail(args, "close")?;
     pos_n(&p, 1, "close ID")?;
-    let reason = opt(&p, "reason")
-        .filter(|r| !r.trim().is_empty())
-        .ok_or_else(|| usage("--reason is required"))?;
-    let reason = validated_history_text(reason, "--reason")?;
-    let summary = opt(&p, "summary")
-        .map(|s| validated_history_text(s, "--summary"))
-        .transpose()?;
+    let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
+    let summary = opt(&p, "summary");
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let l = load(jig, &p.pos[0])?;
@@ -1483,12 +2230,9 @@ fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[("--reason", Arity::One, "reason")], &[])?;
+    let p = parse_command_tail(args, "reopen")?;
     pos_n(&p, 1, "reopen ID")?;
-    let reason = opt(&p, "reason")
-        .filter(|r| !r.trim().is_empty())
-        .ok_or_else(|| usage("--reason is required"))?;
-    let reason = validated_history_text(reason, "--reason")?;
+    let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let l = load(jig, &p.pos[0])?;
@@ -1513,14 +2257,9 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
-    let p = parse_tail(args, &[], &[])?;
+    let p = parse_command_tail(args, "release")?;
     pos_n(&p, 1, "release NAME")?;
     let name = &p.pos[0];
-    if !issue::valid_release(name) {
-        return Err(usage(
-            "release must be a non-empty single line without surrounding whitespace",
-        ));
-    }
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let snap = check::scan(jig);
@@ -1599,7 +2338,7 @@ fn reaches(g: &HashMap<String, Vec<String>>, from: &str, to: &str) -> bool {
 }
 
 fn cmd_dep(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[], &[])?;
+    let p = parse_command_tail(args, "dep")?;
     pos_n(&p, 3, "dep add|rm ID BLOCKER")?;
     let lock = registry(cwd)?;
     let jig = &lock.jig;
@@ -1643,31 +2382,9 @@ fn cmd_dep(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_note(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[("--by", Arity::One, "by")], &[])?;
+    let p = parse_command_tail(args, "note")?;
     pos_n(&p, 2, "note ID TEXT")?;
-    if let Some(b) = opt(&p, "by")
-        && !issue::valid_label(b)
-    {
-        return Err(usage("--by must be a non-empty single line"));
-    }
     let text = &p.pos[1];
-    if text.is_empty() {
-        return Err(usage("note text is empty"));
-    }
-    if text
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-    {
-        return Err(usage(
-            "note text must be a single line without control characters or Unicode line separators",
-        ));
-    }
-    let count = text.chars().count();
-    if count > 500 {
-        return Err(usage(format!(
-            "note has {count} characters; maximum is 500"
-        )));
-    }
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
     let mut i = l.issue.clone();
@@ -1683,24 +2400,12 @@ fn cmd_note(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_defer(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(
-        args,
-        &[
-            ("--until", Arity::One, "until"),
-            ("--clear", Arity::Switch, "clear"),
-        ],
-        &[],
-    )?;
+    let p = parse_command_tail(args, "defer")?;
     pos_n(&p, 1, "defer ID")?;
     let until = opt(&p, "until");
     let clear = flag(&p, "clear");
     if until.is_some() == clear {
         return Err(usage("defer requires exactly one of --until or --clear"));
-    }
-    if let Some(d) = until
-        && !clock::valid_date(d)
-    {
-        return Err(usage(format!("invalid defer date {d:?}")));
     }
     let lock = registry(cwd)?;
     let l = load(&lock.jig, &p.pos[0])?;
@@ -1724,12 +2429,9 @@ fn load_memory(jig: &Path) -> R<memory::Memory> {
 }
 
 fn cmd_remember(args: &[String], cwd: &Path) -> R<String> {
-    let p = parse_tail(args, &[], &[])?;
+    let p = parse_command_tail(args, "remember")?;
     pos_n(&p, 2, "remember TOPIC TEXT")?;
     let topic = &p.pos[0];
-    if !memory::valid_topic(topic) {
-        return Err(usage(format!("invalid topic {topic:?}")));
-    }
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let mut mem = load_memory(jig)?;
@@ -1744,7 +2446,7 @@ fn cmd_remember(args: &[String], cwd: &Path) -> R<String> {
 }
 
 fn cmd_recall(args: &[String], cwd: &Path, json: bool) -> R<String> {
-    let p = parse_tail(args, &[("--json", Arity::Switch, "json")], &[])?;
+    let p = parse_command_tail(args, "recall")?;
     if p.pos.len() > 1 {
         return Err(usage("expected at most one topic"));
     }
@@ -1778,4 +2480,99 @@ fn cmd_recall(args: &[String], cwd: &Path, json: bool) -> R<String> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hist_entry, history_text};
+    use crate::issue::{self, Issue, Status};
+    use crate::memory;
+    use crate::text::TextKind;
+    use crate::text::generated::{self, Rng};
+
+    fn issue(status: Status) -> Issue {
+        Issue {
+            id: "B-abcdef".into(),
+            title: "t".into(),
+            status,
+            priority: 2,
+            parent: None,
+            depends_on: Vec::new(),
+            assignee: None,
+            defer_until: None,
+            created_at: Some("2026-01-02T03:04:05Z".into()),
+            updated_at: None,
+            closed_at: None,
+            release: None,
+            claim_id: None,
+            body: String::new(),
+            history: String::new(),
+            notes: String::new(),
+            closing_summary: None,
+        }
+    }
+
+    fn round_trip(issue: &Issue, what: &str, case: usize) {
+        let encoded = issue::encode(issue)
+            .unwrap_or_else(|e| panic!("case {case} {what}: accepted value refused by codec: {e}"));
+        let decoded = issue::decode(&encoded).unwrap();
+        assert_eq!(
+            &decoded, issue,
+            "case {case} {what}: bytes changed through the file"
+        );
+    }
+
+    #[test]
+    fn accepted_text_survives_the_file_codec() {
+        let mut rng = Rng(0xc0de_c0de);
+        let mut stored = 0;
+        for case in 0..3000 {
+            let (value, _) = generated::text(&mut rng);
+            if TextKind::Label.check("title", true, &value).is_ok() {
+                let mut open = issue(Status::Open);
+                open.title = value.clone();
+                round_trip(&open, "title", case);
+                let mut claimed = issue(Status::Claimed);
+                claimed.claim_id = Some("0123456789abcdef0123456789abcdef".into());
+                claimed.assignee = Some(value.clone());
+                round_trip(&claimed, "assignee", case);
+                stored += 1;
+            }
+            if TextKind::Body.check("body", false, &value).is_ok() {
+                let mut open = issue(Status::Open);
+                open.body = value.clone();
+                round_trip(&open, "body", case);
+                stored += 1;
+            }
+            if TextKind::Multiline
+                .check("--summary", false, &value)
+                .is_ok()
+            {
+                let mut closed = issue(Status::Closed);
+                closed.closed_at = Some("2026-01-02T03:04:05Z".into());
+                closed.history = hist_entry(&history_text("closed:", &value));
+                closed.closing_summary = Some(value.clone());
+                round_trip(&closed, "history and closing summary", case);
+                stored += 1;
+            }
+            if TextKind::Release.check("release", true, &value).is_ok() {
+                let mut closed = issue(Status::Closed);
+                closed.release = Some(value.clone());
+                round_trip(&closed, "release", case);
+                stored += 1;
+            }
+            if TextKind::Note.check("text", true, &value).is_ok() {
+                let mut open = issue(Status::Open);
+                open.notes = format!("- 2026-01-02 03:04:05 UTC -me: {value}");
+                round_trip(&open, "note", case);
+                stored += 1;
+            }
+            let memory = memory::Memory {
+                entries: vec![("topic".into(), value.clone())],
+            };
+            let parsed = memory::parse(&memory::render(&memory)).unwrap();
+            assert_eq!(parsed.entries, memory.entries, "case {case} memory value");
+        }
+        assert!(stored > 3000, "only {stored} stored values");
+    }
 }

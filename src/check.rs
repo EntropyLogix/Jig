@@ -8,16 +8,102 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProblemKind {
+    IssueDirectory,
+    IssueDirectoryUnlistable,
+    IssueEntryUnlistable,
+    IssueNameNotUtf8,
+    TemporaryFile,
+    UnexpectedFile,
+    IssueUnreadable,
+    IssuePriority,
+    DuplicateId,
+    FileNameMismatch,
+    WrongDirectory,
+    DependencyCycle,
+    DocsUnlistable,
+    DocsDirectory,
+    DocsEntryUnlistable,
+    DocsNameNotUtf8,
+    DocsEntryUninspectable,
+    DocsSymlink,
+    DocsNotDirectory,
+    DocsOrphan,
+    MemoryFile,
+    MemoryMissing,
+    MemoryUnreadable,
+    MemoryMalformed,
+    GitignoreFile,
+    GitignoreMissing,
+    GitignoreUnreadable,
+    GitignoreLegacyRule,
+    AgentInstructions,
+    PendingMove,
+    MoveJournal,
+    FieldConflict,
+    MissingParent,
+    MissingBlocker,
+    UnresolvedReference,
+}
+
+impl ProblemKind {
+    pub const ALL: [ProblemKind; 35] = [
+        ProblemKind::IssueDirectory,
+        ProblemKind::IssueDirectoryUnlistable,
+        ProblemKind::IssueEntryUnlistable,
+        ProblemKind::IssueNameNotUtf8,
+        ProblemKind::TemporaryFile,
+        ProblemKind::UnexpectedFile,
+        ProblemKind::IssueUnreadable,
+        ProblemKind::IssuePriority,
+        ProblemKind::DuplicateId,
+        ProblemKind::FileNameMismatch,
+        ProblemKind::WrongDirectory,
+        ProblemKind::DependencyCycle,
+        ProblemKind::DocsUnlistable,
+        ProblemKind::DocsDirectory,
+        ProblemKind::DocsEntryUnlistable,
+        ProblemKind::DocsNameNotUtf8,
+        ProblemKind::DocsEntryUninspectable,
+        ProblemKind::DocsSymlink,
+        ProblemKind::DocsNotDirectory,
+        ProblemKind::DocsOrphan,
+        ProblemKind::MemoryFile,
+        ProblemKind::MemoryMissing,
+        ProblemKind::MemoryUnreadable,
+        ProblemKind::MemoryMalformed,
+        ProblemKind::GitignoreFile,
+        ProblemKind::GitignoreMissing,
+        ProblemKind::GitignoreUnreadable,
+        ProblemKind::GitignoreLegacyRule,
+        ProblemKind::AgentInstructions,
+        ProblemKind::PendingMove,
+        ProblemKind::MoveJournal,
+        ProblemKind::FieldConflict,
+        ProblemKind::MissingParent,
+        ProblemKind::MissingBlocker,
+        ProblemKind::UnresolvedReference,
+    ];
+}
+
 #[derive(Clone)]
 pub(crate) struct Problem {
+    pub kind: ProblemKind,
     pub path: PathBuf,
     pub problem: String,
     pub hint: String,
 }
 
 impl Problem {
-    fn at(path: PathBuf, problem: impl Into<String>, hint: impl Into<String>) -> Problem {
+    fn at(
+        kind: ProblemKind,
+        path: PathBuf,
+        problem: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Problem {
         Problem {
+            kind,
             path,
             problem: problem.into(),
             hint: hint.into(),
@@ -141,6 +227,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             Ok(None) => continue,
             Err(e) => {
                 problems.push(Problem::at(
+                    ProblemKind::IssueDirectory,
                     rel_dir,
                     e,
                     "restore a real directory at this path",
@@ -152,6 +239,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             Ok(rd) => rd,
             Err(e) => {
                 problems.push(Problem::at(
+                    ProblemKind::IssueDirectoryUnlistable,
                     rel_dir,
                     format!("cannot list directory: {e}"),
                     "fix directory permissions",
@@ -164,6 +252,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                 Ok(ent) => ent,
                 Err(e) => {
                     problems.push(Problem::at(
+                        ProblemKind::IssueEntryUnlistable,
                         rel_dir.clone(),
                         format!("cannot list entry: {e}"),
                         "fix directory permissions",
@@ -175,6 +264,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             let path = rel(place, &name);
             let Some(name) = name.to_str() else {
                 problems.push(Problem::at(
+                    ProblemKind::IssueNameNotUtf8,
                     path,
                     "unexpected file with a non-UTF-8 name",
                     "remove or rename the file",
@@ -183,6 +273,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             };
             if name.starts_with('.') && name.contains(".tmp-") {
                 problems.push(Problem::at(
+                    ProblemKind::TemporaryFile,
                     path,
                     "abandoned temporary file",
                     "remove it after checking no jig process is running",
@@ -191,6 +282,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             }
             if name.starts_with('.') || !name.ends_with(".md") {
                 problems.push(Problem::at(
+                    ProblemKind::UnexpectedFile,
                     path,
                     "unexpected file in an issue directory",
                     "remove or rename the file",
@@ -204,14 +296,20 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                 .push(path.clone());
             match store::read_issue_file(&ent.path()) {
                 Err(e) => {
-                    let hint = if e.starts_with(crate::issue::BAD_PRIORITY)
+                    let (kind, hint) = if e.starts_with(crate::issue::BAD_PRIORITY)
                         || e == "missing frontmatter key \"priority\""
                     {
-                        "set the `priority` field to an integer from 0 to 4"
+                        (
+                            ProblemKind::IssuePriority,
+                            "set the `priority` field to an integer from 0 to 4",
+                        )
                     } else {
-                        "fix the file or restore it from version control"
+                        (
+                            ProblemKind::IssueUnreadable,
+                            "fix the file or restore it from version control",
+                        )
                     };
-                    problems.push(Problem::at(path, e, hint));
+                    problems.push(Problem::at(kind, path, e, hint));
                     parse_failures.push((stem, rel(place, &ent.file_name())));
                 }
                 Ok((issue, _)) => {
@@ -238,6 +336,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
         }
         for path in paths {
             problems.push(Problem::at(
+                ProblemKind::DuplicateId,
                 path.clone(),
                 format!("duplicate issue id {id}"),
                 "keep one record for this issue and remove the others",
@@ -260,6 +359,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             .to_string();
         if rec.issue.id != stem {
             problems.push(Problem::at(
+                ProblemKind::FileNameMismatch,
                 rec.path.clone(),
                 format!("file name does not match issue id {}", rec.issue.id),
                 format!("rename the file to {}.md or fix the id field", rec.issue.id),
@@ -279,6 +379,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
         }
         if Place::of(rec.issue.status) != rec.place {
             problems.push(Problem::at(
+                ProblemKind::WrongDirectory,
                 rec.path.clone(),
                 format!(
                     "status {} does not belong in {}/",
@@ -420,6 +521,7 @@ fn dependency_cycles(snap: &Snapshot) -> Vec<Problem> {
                     display.push_str(" -> ");
                     display.push_str(&first);
                     problems.push(Problem::at(
+                        ProblemKind::DependencyCycle,
                         PathBuf::from(".jig")
                             .join(Place::of(graph[first.as_str()].status).dir())
                             .join(format!("{first}.md")),
@@ -448,6 +550,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
             Ok(entries) => entries,
             Err(error) => {
                 problems.push(Problem::at(
+                    ProblemKind::DocsUnlistable,
                     PathBuf::from(".jig/docs"),
                     format!("cannot list directory: {error}"),
                     "fix directory permissions",
@@ -458,6 +561,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
         Ok(None) => return problems,
         Err(error) => {
             problems.push(Problem::at(
+                ProblemKind::DocsDirectory,
                 PathBuf::from(".jig/docs"),
                 error,
                 "restore a real directory at this path or remove it",
@@ -475,6 +579,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
             Ok(entry) => entry,
             Err(error) => {
                 problems.push(Problem::at(
+                    ProblemKind::DocsEntryUnlistable,
                     PathBuf::from(".jig/docs"),
                     format!("cannot list entry: {error}"),
                     "fix directory permissions",
@@ -488,6 +593,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
             Some(name) => name,
             None => {
                 problems.push(Problem::at(
+                    ProblemKind::DocsNameNotUtf8,
                     path,
                     "name is not valid UTF-8",
                     "rename it to the issue ID or remove it",
@@ -499,6 +605,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
             Ok(metadata) => metadata,
             Err(error) => {
                 problems.push(Problem::at(
+                    ProblemKind::DocsEntryUninspectable,
                     path,
                     format!("cannot inspect entry: {error}"),
                     "rename it to the issue ID or remove it",
@@ -508,18 +615,21 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
         };
         if entry_metadata.file_type().is_symlink() {
             problems.push(Problem::at(
+                ProblemKind::DocsSymlink,
                 path,
                 "must be a real directory (not a symbolic link)",
                 "rename it to the issue ID or remove it",
             ));
         } else if !entry_metadata.is_dir() {
             problems.push(Problem::at(
+                ProblemKind::DocsNotDirectory,
                 path,
                 "entry is not a directory",
                 "rename it to the issue ID or remove it",
             ));
         } else if !existing.contains(name) {
             problems.push(Problem::at(
+                ProblemKind::DocsOrphan,
                 path,
                 format!("no issue with id {name} exists"),
                 "rename it to the issue ID or remove it",
@@ -527,6 +637,13 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
         }
     }
     problems
+}
+
+pub fn problem_kinds(root: &Path) -> Vec<(ProblemKind, PathBuf)> {
+    collect(&root.join(".jig"))
+        .into_iter()
+        .map(|problem| (problem.kind, problem.path))
+        .collect()
 }
 
 pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
@@ -537,24 +654,32 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     let rel_mem = PathBuf::from(".jig/memory.md");
     match store::metadata_cause(&jig.join("memory.md"), false) {
         Err(e) => problems.push(Problem::at(
+            ProblemKind::MemoryFile,
             rel_mem,
             e,
             "restore memory.md as a regular file or run `jig init`",
         )),
         Ok(None) => problems.push(Problem::at(
+            ProblemKind::MemoryMissing,
             rel_mem,
             "memory.md is missing",
             "run `jig init` to create it",
         )),
         Ok(Some(_)) => match fs::read_to_string(jig.join("memory.md")) {
             Err(e) => problems.push(Problem::at(
+                ProblemKind::MemoryUnreadable,
                 rel_mem,
                 format!("cannot read: {e}"),
                 "fix file permissions or restore memory.md",
             )),
             Ok(text) => {
                 if let Err(e) = memory::parse(&text) {
-                    problems.push(Problem::at(rel_mem, e, "fix memory.md manually"));
+                    problems.push(Problem::at(
+                        ProblemKind::MemoryMalformed,
+                        rel_mem,
+                        e,
+                        "fix memory.md manually",
+                    ));
                 }
             }
         },
@@ -565,17 +690,20 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     const RULE: &str = ".*.tmp-*";
     match store::metadata_cause(&jig.join(".gitignore"), false) {
         Err(e) => problems.push(Problem::at(
+            ProblemKind::GitignoreFile,
             rel_gi,
             e,
             "restore .jig/.gitignore as a regular file",
         )),
         Ok(None) => problems.push(Problem::at(
+            ProblemKind::GitignoreMissing,
             rel_gi,
             ".gitignore is missing",
             format!("add the line `{RULE}` to .jig/.gitignore"),
         )),
         Ok(Some(_)) => match fs::read_to_string(jig.join(".gitignore")) {
             Err(e) => problems.push(Problem::at(
+                ProblemKind::GitignoreUnreadable,
                 rel_gi,
                 format!("cannot read: {e}"),
                 "fix file permissions or restore .jig/.gitignore",
@@ -583,6 +711,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
             Ok(text) => {
                 if text.lines().any(|l| l == LEGACY) {
                     problems.push(Problem::at(
+                        ProblemKind::GitignoreLegacyRule,
                         rel_gi,
                         format!("legacy `{LEGACY}` rule does not ignore nested temporary files"),
                         format!("replace `{LEGACY}` with `{RULE}` in .jig/.gitignore"),
@@ -593,17 +722,24 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     }
 
     if let Some((problem, hint)) = instructions::problem(jig.parent().unwrap()) {
-        problems.push(Problem::at(PathBuf::from("AGENTS.md"), problem, hint));
+        problems.push(Problem::at(
+            ProblemKind::AgentInstructions,
+            PathBuf::from("AGENTS.md"),
+            problem,
+            hint,
+        ));
     }
 
     match store::inspect_move(jig) {
         Ok(None) => {}
         Ok(Some(id)) => problems.push(Problem::at(
+            ProblemKind::PendingMove,
             PathBuf::from(".jig/.move"),
             format!("pending move journal for {id}"),
             "finish it with any write command in a writable checkout, or resolve .jig/.move manually",
         )),
         Err(e) => problems.push(Problem::at(
+            ProblemKind::MoveJournal,
             PathBuf::from(".jig/.move"),
             e,
             "resolve .jig/.move manually",
@@ -613,6 +749,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     for rec in &snap.records {
         for (problem, hint) in domain::field_problems(&rec.issue) {
             problems.push(Problem::at(
+                ProblemKind::FieldConflict,
                 rec.path.clone(),
                 problem,
                 format!("{hint} in {}", rec.path.display()),
@@ -622,6 +759,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
             && let Err(e) = snap.resolve(parent)
         {
             problems.push(Problem::at(
+                ProblemKind::MissingParent,
                 rec.path.clone(),
                 format!("parent {parent}: {e}"),
                 format!(
@@ -633,6 +771,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
         for dep in &rec.issue.depends_on {
             if let Err(e) = snap.resolve(dep) {
                 problems.push(Problem::at(
+                    ProblemKind::MissingBlocker,
                     rec.path.clone(),
                     format!("blocker {dep}: {e}"),
                     format!(
@@ -679,6 +818,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                     continue;
                 }
                 problems.push(Problem::at(
+                    ProblemKind::UnresolvedReference,
                     rec.path.clone(),
                     format!("unresolved {reference}"),
                     "fix or restore the referenced issue; see the other reported problems",

@@ -769,3 +769,158 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
     validate(&issue)?;
     Ok(issue)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Issue, Status, decode, encode, id_alias, valid_id};
+    use crate::text::TextKind;
+
+    fn open_issue(body: &str) -> Issue {
+        Issue {
+            id: "B-abc123".into(),
+            title: "t".into(),
+            status: Status::Open,
+            priority: 2,
+            parent: None,
+            depends_on: Vec::new(),
+            assignee: None,
+            defer_until: None,
+            created_at: Some("2026-01-02T03:04:05Z".into()),
+            updated_at: None,
+            closed_at: None,
+            release: None,
+            claim_id: None,
+            body: body.into(),
+            history: String::new(),
+            notes: String::new(),
+            closing_summary: None,
+        }
+    }
+
+    #[test]
+    fn frontmatter_scalars_are_strict_and_name_the_field() {
+        let text = encode(&open_issue(
+            "para\n\n```\n## History\n## Notes\n```\n\n> ## Notes\n\ntail",
+        ))
+        .unwrap();
+        assert_eq!(
+            decode(&text).unwrap().body,
+            "para\n\n```\n## History\n## Notes\n```\n\n> ## Notes\n\ntail",
+            "fenced and blockquoted reserved headings stay body"
+        );
+        for (field, value) in [
+            ("title", "plain #tag"),
+            ("title", "'x'"),
+            ("title", "x # comment"),
+            ("title", "|"),
+            ("title", "\"a\\zb\""),
+            ("title", "\"a\" # c"),
+            ("title", "[B1]"),
+            ("parent", "B440"),
+            ("created_at", "~"),
+            ("created_at", "2020-05-04"),
+            ("claim_id", "'x'"),
+            ("depends_on", "[B1]"),
+        ] {
+            let line = text
+                .lines()
+                .find(|l| l.starts_with(&format!("{field}:")))
+                .unwrap();
+            let broken = text.replacen(line, &format!("{field}: {value}"), 1);
+            let error = decode(&broken).unwrap_err();
+            assert!(
+                error.contains(field),
+                "{field}: {value} must name the field, got {error}"
+            );
+        }
+        let escaped = text.replace("title: \"t\"", "title: \"a\\u0142b\"");
+        assert_eq!(decode(&escaped).unwrap().title, "a\u{0142}b");
+        let legacy = text
+            .replace("id: \"B-abc123\"", "id: \"B440.2\"")
+            .replace("parent: null", "parent: \"B440\"")
+            .replace(
+                "created_at: \"2026-01-02T03:04:05Z\"",
+                "created_at: \"2020-05-04\"",
+            );
+        let issue = decode(&legacy).unwrap();
+        assert_eq!((issue.id.as_str(), issue.priority), ("B440.2", 2));
+        assert_eq!(issue.created_at.as_deref(), Some("2020-05-04"));
+    }
+
+    #[test]
+    fn fields_are_read_in_any_order_and_written_canonically() {
+        let canonical = encode(&open_issue("body")).unwrap();
+        let mut lines: Vec<&str> = canonical.lines().collect();
+        lines.swap(1, 2);
+        lines.swap(4, 12);
+        let reordered = format!("{}\n", lines.join("\n"));
+        assert_ne!(reordered, canonical);
+        let issue = decode(&reordered).unwrap();
+        assert_eq!(issue, open_issue("body"), "a reordered file is valid");
+        assert_eq!(
+            encode(&issue).unwrap(),
+            canonical,
+            "the next write restores the canonical order"
+        );
+    }
+
+    #[test]
+    fn ids_and_aliases() {
+        for id in ["B-abcdef", "B-abcdef.2.10", "B440"] {
+            assert!(valid_id(id), "{id}");
+        }
+        for id in ["B-abcdef.0", "B-abcdef.02", "abcdef", "B-ABC123"] {
+            assert!(!valid_id(id), "{id}");
+        }
+        assert_eq!(id_alias("abcdef").as_deref(), Some("B-abcdef"));
+        assert_eq!(id_alias("abcdef.2").as_deref(), Some("B-abcdef.2"));
+    }
+
+    #[test]
+    fn structural_markers_round_trip_or_refuse() {
+        let accepted = [
+            "conflict quoted in fence\n\n```\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch\n```\n",
+            "tilde fence\n~~~\n<<<<<<< h\n=======\n>>>>>>> j\n~~~\n",
+            "setext\n=======\n\n>>>>>>> stray end token\n",
+            "eight\n<<<<<<<<\n========\n>>>>>>>>\n",
+            "crlf\ta\r\n\r\nb\r\n",
+            "unicode “quotes” 'single' \"double\" żółć\n\nblank\n\n---\n",
+            "fenced reserved\n```\n  ## History ###\n```\n",
+            "indented code\n    ## Notes\n\n\t## Closing Summary\n",
+            "quoted reserved\n> ## Notes\n",
+            "conflict spanning fence\n<<<<<<< x\n=======\n```\ninside\n```\n>>>>>>> y\n",
+            "\n````md\n```\n## History\n```\n````\n\ntrailing\n\n",
+        ];
+        for (n, body) in accepted.iter().enumerate() {
+            assert_eq!(
+                TextKind::Body.check("body", false, body),
+                Ok(()),
+                "case {n}"
+            );
+            let issue = open_issue(body);
+            assert_eq!(
+                decode(&encode(&issue).unwrap()).unwrap(),
+                issue,
+                "case {n} round trip"
+            );
+        }
+        let refused = [
+            "real conflict\n\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch\n",
+            "indented reserved\n  ## History\n",
+            "closing hashes\n## Notes ###\n",
+            "premature end then triplet\n>>>>>>> z\n\n<<<<<<< x\n=======\n>>>>>>> y\n",
+            "text\n\n## History\n",
+            "ok\n\n```\nunclosed",
+        ];
+        for (n, body) in refused.iter().enumerate() {
+            assert!(
+                TextKind::Body.check("body", false, body).is_err(),
+                "case {n}"
+            );
+            assert!(
+                encode(&open_issue(body)).is_err(),
+                "case {n}: the codec refuses too"
+            );
+        }
+    }
+}

@@ -393,7 +393,10 @@ contract and acceptance checks for v1.
   `priority`, `parent`, `depends_on`, `assignee`, `defer_until`, `created_at`,
   `updated_at`, `closed_at`, and `release`. Add a nullable `claim_id` to
   distinguish independent claims, even with identical or absent assignee
-  labels. Use `null` for unset scalar fields and `[]` for no dependencies.
+  labels. Jig always writes the fields in this order and reads them in any
+  order, so a hand edit or a resolved merge conflict that reorders lines
+  stays valid, and the next write restores the order. Use `null` for unset
+  scalar fields and `[]` for no dependencies.
   `priority` is never `null`: it is always an integer from 0 to 4, and any
   other value, `null` included, makes the file invalid like any other invalid
   field. `check` names the field and hints to set it to 0–4. `release` is

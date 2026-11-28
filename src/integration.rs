@@ -457,3 +457,164 @@ fn hook_update(text: &str) -> Result<Option<String>, String> {
     }
     Ok(Some(result))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::hook_update;
+    use serde_json::{Value, json};
+
+    fn assert_splice(orig: &str, result: &str) {
+        let ob = orig.as_bytes();
+        let rb = result.as_bytes();
+        let pre = (0..ob.len().min(rb.len()))
+            .find(|&i| ob[i] != rb[i])
+            .unwrap_or(ob.len());
+        let mut suf = 0usize;
+        while suf < (ob.len() - pre).min(rb.len() - pre)
+            && ob[ob.len() - 1 - suf] == rb[rb.len() - 1 - suf]
+        {
+            suf += 1;
+        }
+        assert_eq!(&result[..pre], &orig[..pre], "prefix changed");
+        assert_eq!(
+            &result[result.len() - suf..],
+            &orig[orig.len() - suf..],
+            "suffix changed"
+        );
+        let inserted = &result[pre..result.len() - suf];
+        let v: Value = serde_json::from_str(result).unwrap();
+        let groups = v["hooks"]["SessionStart"].as_array().unwrap();
+        let standard =
+            json!({"hooks":[{"command":"jig start --hook-json","timeout":5,"type":"command"}]});
+        assert_eq!(
+            groups.last().unwrap(),
+            &standard,
+            "inserted fragment {inserted:?} lacks the hook group"
+        );
+    }
+
+    #[test]
+    fn session_start_hook_splice_matrix() {
+        let cases: &[&str] = &[
+            "",
+            "   \n\n",
+            "{}",
+            "{\"model\": \"opus\"}",
+            "{\"hooks\":{}}",
+            "{\n  \"hooks\": {\n    \"SessionStart\": []\n  }\n}\n",
+            "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"old\"}]}],\"Stop\":[{\"hooks\":[]}]},\"other\":{\"esc\":\"a\\\"b\",\"deep\":[[1,2],{\"k\":null}]}}",
+            "{\r\n  \"hooks\": {\r\n    \"SessionStart\": []\r\n  }\r\n}\r\n",
+        ];
+        let refusals: &[(&str, &str)] = &[
+            ("{\"hooks\":{},\"hooks\":{}}", "duplicate key \"hooks\""),
+            (
+                "{\"hooks\":{\"SessionStart\":[],\"SessionStart\":[]}}",
+                "duplicate key \"SessionStart\"",
+            ),
+            (
+                "{\"hooks\":{\"\\u0053essionStart\":[],\"SessionStart\":[]}}",
+                "duplicate key \"SessionStart\"",
+            ),
+            (
+                "{\"hooks\":{\"SessionStart\":\"nope\"}}",
+                "SessionStart to be an array",
+            ),
+            (
+                "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":9}]}]}}",
+                "differs or is duplicated",
+            ),
+            ("{bad json", "invalid JSON"),
+        ];
+        let two = concat!(
+            "{\n  \"model\": \"opus\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n",
+            "        \"hooks\": [\n          {\n            \"type\": \"command\",\n",
+            "            \"command\": \"jig start --hook-json\",\n            \"timeout\": 5\n",
+            "          }\n        ]\n      }\n    ]\n  }\n}\n"
+        );
+        let four = concat!(
+            "{\n    \"hooks\": {\n        \"PostToolUse\": [{\"hooks\": []}],\n",
+            "        \"SessionStart\": [\n            {\n                \"hooks\": [\n",
+            "                    {\n                        \"type\": \"command\",\n",
+            "                        \"command\": \"jig start --hook-json\",\n",
+            "                        \"timeout\": 5\n                    }\n                ]\n",
+            "            }\n        ]\n    }\n}"
+        );
+        let tab = concat!(
+            "{\n\t\"hooks\": {\n\t\t\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"old\"}]},\n",
+            "\t\t\t{\n\t\t\t\t\"hooks\": [\n\t\t\t\t\t{\n",
+            "\t\t\t\t\t\t\"type\": \"command\",\n",
+            "\t\t\t\t\t\t\"command\": \"jig start --hook-json\",\n",
+            "\t\t\t\t\t\t\"timeout\": 5\n\t\t\t\t\t}\n\t\t\t\t]\n",
+            "\t\t\t}\n\t\t]\n\t}\n}"
+        );
+        let crlf = concat!(
+            "{\r\n  \"hooks\": {\r\n    \"SessionStart\": [\r\n      {\r\n",
+            "        \"hooks\": [\r\n          {\r\n            \"type\": \"command\",\r\n",
+            "            \"command\": \"jig start --hook-json\",\r\n            \"timeout\": 5\r\n",
+            "          }\r\n        ]\r\n      }\r\n    ]\r\n  }\r\n}\r\n"
+        );
+        let mixed = concat!(
+            "{\n    \"model\": 1, \"hooks\": {\n        \"SessionStart\": [\n            {\n",
+            "                \"hooks\": [\n                    {\n",
+            "                        \"type\": \"command\",\n",
+            "                        \"command\": \"jig start --hook-json\",\n",
+            "                        \"timeout\": 5\n                    }\n                ]\n",
+            "            }\n        ]\n    }\n}"
+        );
+        let exact: &[(&str, &str, &str)] = &[
+            (
+                "mixed_inline_sibling",
+                "{\n    \"model\": 1, \"hooks\": {}\n}",
+                mixed,
+            ),
+            ("two_space_infer_root", "{\n  \"model\": \"opus\"\n}\n", two),
+            (
+                "four_space_missing_sessionstart",
+                "{\n    \"hooks\": {\n        \"PostToolUse\": [{\"hooks\": []}]\n    }\n}",
+                four,
+            ),
+            (
+                "tab_populated_array",
+                "{\n\t\"hooks\": {\n\t\t\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"old\"}]}]\n\t}\n}",
+                tab,
+            ),
+            (
+                "crlf_empty_array",
+                "{\r\n  \"hooks\": {\r\n    \"SessionStart\": []\r\n  }\r\n}\r\n",
+                crlf,
+            ),
+            (
+                "compact_empty",
+                "{}",
+                "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}",
+            ),
+            (
+                "compact_final_lf",
+                "{}\n",
+                "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}\n",
+            ),
+            (
+                "compact_member",
+                "{\"model\": \"opus\"}",
+                "{\"model\": \"opus\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}",
+            ),
+        ];
+
+        for (n, orig) in cases.iter().enumerate() {
+            let result = hook_update(orig)
+                .unwrap()
+                .unwrap_or_else(|| panic!("case {n} unchanged"));
+            assert_splice(orig, &result);
+            assert_eq!(hook_update(&result), Ok(None), "case {n} is idempotent");
+        }
+        for (name, orig, expected) in exact {
+            let result = hook_update(orig).unwrap().unwrap();
+            assert_eq!(&result, expected, "{name} follows the surrounding style");
+            assert_eq!(hook_update(&result), Ok(None), "{name} is idempotent");
+        }
+        for (n, (orig, needle)) in refusals.iter().enumerate() {
+            let error = hook_update(orig).unwrap_err();
+            assert!(error.contains(needle), "refusal {n}: {error}");
+        }
+    }
+}

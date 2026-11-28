@@ -26,8 +26,9 @@ cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v1.0.0
 
 The `jig` binary lands on your Cargo `PATH` (usually `~/.cargo/bin`) and needs
 no other checkout at runtime. Its only direct third-party dependency is pinned
-`serde_json`, used for editing agent configuration during `init`; license
-texts for the resolved runtime crates live in `licenses/`.
+`serde_json`, used for editing agent configuration during `init` and for JSON-RPC
+messages in `jig mcp`. License texts for the resolved runtime crates live in
+`licenses/`.
 
 ## Quick start
 
@@ -51,6 +52,67 @@ Files may be browsed and hand-edited directly; agents use `jig` for registry
 changes so that mutations are serialized by `.jig/.lock` and cross-directory
 moves are journaled through `.jig/.move` (a crashed move is finished on the
 next command). Agents write issue documents directly under `.jig/docs/ID/`.
+
+## MCP server
+
+`jig mcp` is an optional Model Context Protocol server over stdio. The client
+starts it for a session and ends it; `jig` does not run a daemon. Use it for an
+agent without a shell or for a client where a person approves tool calls. An
+agent with a shell can use the CLI and its hooks, which use less context than
+the MCP tool schemas.
+
+The server searches for `.jig/` upward from its working directory for every
+tool call, so the client must start it in the project. `jig init` does not
+register the server with a client.
+
+Claude Code, using the project scope, can register it with:
+
+```sh
+claude mcp add --scope project jig -- jig mcp
+```
+
+For a project permission policy that asks before human decisions, use the
+following entries in `.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "ask": [
+      "mcp__jig__approve",
+      "mcp__jig__revise",
+      "mcp__jig__rework",
+      "mcp__jig__close",
+      "mcp__jig__reopen",
+      "mcp__jig__release",
+      "mcp__jig__init"
+    ]
+  }
+}
+```
+
+Codex uses a TOML entry in `~/.codex/config.toml`, or in `.codex/config.toml`
+for a trusted project:
+
+```toml
+[mcp_servers.jig]
+command = "jig"
+args = ["mcp"]
+```
+
+EntropyForge uses this server entry in `config/config.json`. The server runs
+in the repository of the session. Set the client permission at the top level:
+
+```json
+{
+  "mcpServers": {
+    "jig": {
+      "command": "jig",
+      "args": ["mcp"]
+    }
+  },
+  "permission": "ask"
+}
+```
 
 ## Command reference
 
@@ -78,9 +140,10 @@ jig defer ID --until YYYY-MM-DD | --clear
 jig remember TOPIC TEXT
 jig recall [TOPIC] [--json]
 jig check [--json]
+jig mcp
 ```
 
-A bare `jig` prints the command reference above (same as `jig help`,
+A bare `jig` prints a grouped summary of these commands (same as `jig help`,
 `jig --help`, or `jig -h`). `--json` may appear before or after the command for
 read commands. `--` stops option parsing. `--body -` reads standard input;
 omitting `--body` never reads stdin. A bare six-hex suffix (`a3f8c1`) is

@@ -30,6 +30,7 @@ macro_rules! text {
 }
 
 pub(crate) const WORKFLOW: &str = text!("Jig workflow");
+pub(crate) const MCP_INSTRUCTIONS: &str = "Use these MCP tools instead of running `jig` in the shell. Each tool mirrors the command of the same name. A person's refusal of a tool call is final and is not retried through the shell.";
 const BLOCK: &str = text!("## Issue tracking with Jig");
 
 fn content_hash(text: &str) -> u64 {
