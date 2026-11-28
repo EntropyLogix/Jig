@@ -13,10 +13,12 @@ pub enum TextKind {
     Multiline,
     Body,
     Free,
+    Prefix,
+    Number,
 }
 
 impl TextKind {
-    pub const ALL: [TextKind; 9] = [
+    pub const ALL: [TextKind; 11] = [
         TextKind::Id,
         TextKind::Label,
         TextKind::Release,
@@ -26,13 +28,27 @@ impl TextKind {
         TextKind::Multiline,
         TextKind::Body,
         TextKind::Free,
+        TextKind::Prefix,
+        TextKind::Number,
     ];
 
     pub fn check(self, field: &str, required: bool, value: &str) -> Result<(), String> {
         let line_break = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
         match self {
-            TextKind::Id if issue::id_alias(value).is_none() => {
-                Err(format!("invalid issue id {value:?}"))
+            TextKind::Id if !issue::reference_syntax(value) => {
+                Err(format!("invalid issue reference {value:?}"))
+            }
+            TextKind::Prefix if !issue::valid_prefix(value) => Err(format!(
+                "invalid prefix {value:?}; {}",
+                crate::config::PREFIX_RULE
+            )),
+            TextKind::Number
+                if value.is_empty()
+                    || value.starts_with('0')
+                    || !value.bytes().all(|c| c.is_ascii_digit())
+                    || value.parse::<u64>().is_err() =>
+            {
+                Err(format!("invalid issue number {value:?}"))
             }
             TextKind::Label if !issue::valid_label(value) => {
                 Err(format!("{field} must be a non-empty single line"))
@@ -185,7 +201,11 @@ mod tests {
             TextKind::Multiline => STRUCT | CTRL,
             TextKind::Body => STRUCT,
             TextKind::Free => 0,
-            TextKind::Id | TextKind::Topic | TextKind::Date => unreachable!(),
+            TextKind::Id
+            | TextKind::Topic
+            | TextKind::Date
+            | TextKind::Prefix
+            | TextKind::Number => unreachable!(),
         };
         tags & refused == 0
     }
@@ -253,7 +273,17 @@ mod tests {
                 "--by: reserved heading ## Notes",
             ),
             (TextKind::Body, "```\nx", "body: unclosed code fence"),
-            (TextKind::Id, "B-ZZZZZZ", "invalid issue id \"B-ZZZZZZ\""),
+            (
+                TextKind::Id,
+                "B-ZZZZZZ",
+                "invalid issue reference \"B-ZZZZZZ\"",
+            ),
+            (
+                TextKind::Prefix,
+                "ab",
+                "invalid prefix \"ab\"; use 1 to 8 uppercase letters, optionally followed by '-'",
+            ),
+            (TextKind::Number, "012", "invalid issue number \"012\""),
             (TextKind::Topic, "-x", "invalid topic \"-x\""),
             (
                 TextKind::Date,
@@ -295,13 +325,23 @@ mod tests {
         let mut rng = Rng(0xf0_4a75);
         let hex = b"0123456789abcdef";
         for case in 0..3000 {
-            let stem: String = (0..6).map(|_| hex[rng.below(16)] as char).collect();
+            let mut stem: String = (0..6).map(|_| hex[rng.below(16)] as char).collect();
+            stem.replace_range(0..1, &((b'0' + rng.below(10) as u8) as char).to_string());
+            if !stem.bytes().any(|c| c.is_ascii_alphabetic()) {
+                stem.replace_range(5..6, "e");
+            }
             let suffix: String = (0..rng.below(3))
                 .map(|_| format!(".{}", 1 + rng.below(30)))
                 .collect();
-            let id = format!("B-{stem}{suffix}");
-            let legacy = format!("B{}{suffix}", 1 + rng.below(9999));
-            for valid in [id.clone(), legacy, format!("{stem}{suffix}")] {
+            let number = 1 + rng.below(99_999);
+            let key = format!("{stem}{suffix}");
+            for valid in [
+                key.clone(),
+                format!("B{number}{suffix}"),
+                format!("b{number}{suffix}"),
+                format!("AN-{number}{suffix}"),
+                format!("{number}{suffix}"),
+            ] {
                 assert_eq!(
                     TextKind::Id.check("id", true, &valid),
                     Ok(()),
@@ -309,18 +349,21 @@ mod tests {
                 );
             }
             let mut broken = vec![
-                format!("B-{}", &stem[..5]),
-                format!("B-{stem}0"),
-                format!("B-{stem}.0"),
-                format!("B-{stem}.07"),
-                format!("B-{stem}."),
-                format!("b-{stem}"),
-                format!("-{id}"),
-                format!("{id} "),
+                format!("{stem}0"),
+                format!("{stem}.0"),
+                format!("{stem}.07"),
+                format!("{stem}."),
+                format!("B-{stem}"),
+                format!("B0{number}"),
+                format!("B{number}x"),
+                format!("ABCDEFGHI{number}"),
+                format!("-{key}"),
+                format!("{key} "),
             ];
-            if stem.bytes().any(|c| c.is_ascii_alphabetic()) {
-                broken.push(format!("B-{}", stem.to_uppercase()));
+            if stem[..5].bytes().any(|c| c.is_ascii_alphabetic()) {
+                broken.push(stem[..5].to_string());
             }
+            broken.push(stem.to_uppercase());
             for invalid in broken {
                 assert!(
                     TextKind::Id.check("id", true, &invalid).is_err(),

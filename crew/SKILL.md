@@ -13,7 +13,7 @@ The block above is the output of crew for the arguments the person gave.
 If there is no crew output above (Codex does not run it), run crew yourself
 first, with the person's arguments exactly as given, and use its output.
 In Codex the command is `~/.agents/skills/jig-crew/bin/crew`, for example
-`~/.agents/skills/jig-crew/bin/crew audit B-1a2b3c codex-1`. Do not use the
+`~/.agents/skills/jig-crew/bin/crew audit B12 codex-1`. Do not use the
 `~/.claude` path from the line above.
 
 Follow the instructions in the crew output. They define your role, the

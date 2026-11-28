@@ -16,7 +16,7 @@ macro_rules! text {
             "If `jig` is not installed, ask a person to install it: `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v",
             env!("CARGO_PKG_VERSION"),
             "` (https://github.com/EntropyLogix/Jig).\n\n",
-            "- Run `jig start` for the workflow. `jig ready` lists approved, unblocked work; `jig show ID` reads one issue. An issue authorizes only its described scope.\n",
+            "- Run `jig start` for the workflow. `jig ready` lists approved, unblocked work; `jig show ID` reads one issue. An issue authorizes only its described scope. Refer to issues by the ID `jig` prints (for example `B12`, subtask `B12.3`), in commands and in messages; a person may give only the number (`12`).\n",
             "- Claim before working: `jig claim ID --by NAME` with your agent name. Use `--force` only when a person explicitly authorizes it for that issue.\n",
             "- Submit finished work with `jig review ID --summary TEXT`. Approving, revising, returning for rework and closing issues is for people unless a person explicitly tells you otherwise for that issue.\n",
             "- Work found along the way: `jig add TITLE --body TEXT` (it starts as a proposal, not work) and `jig note ID TEXT` on the issue where you found it.\n",
@@ -240,7 +240,7 @@ mod tests {
         );
         let stable = BLOCK.replace(tag, "--tag v<PACKAGE_VERSION>");
         let expected = match VERSION {
-            1 => 0xf23c_63d7_ac03_db99,
+            1 => 0xf63c_9c3f_f77b_3ced,
             v => panic!("Record the block fingerprint for VERSION {v}"),
         };
         assert_eq!(

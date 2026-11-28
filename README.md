@@ -51,7 +51,25 @@ jig recall                  # list remembered topics
 Files may be browsed and hand-edited directly; agents use `jig` for registry
 changes so that mutations are serialized by `.jig/.lock` and cross-directory
 moves are journaled through `.jig/.move` (a crashed move is finished on the
-next command). Agents write issue documents directly under `.jig/docs/ID/`.
+next command). Agents write issue documents directly under `.jig/docs/KEY/`.
+
+## Issue numbers
+
+People and agents refer to an issue by its handle: the project prefix and a
+number, `B1`, `B2`, … in order of creation, and `B1.1` for a subtask of `B1`.
+The prefix is set once with `jig init --prefix AN-` (default `B`) and lives in
+`.jig/config.json`; changing it there changes every handle at once. Commands
+also take the bare number (`jig show 12`) and ignore case (`b12`).
+
+Behind every handle is a random six-character key (`5a3f35`) that names the
+issue's file and documents directory and that `parent` and `depends_on`
+store. It keeps copies of a registry edited on different machines from ever
+merging two issues into one. Two copies can still give the same number to
+different issues before they are synchronized: `list`, `ready`, and `tree` then
+warn, the handle is refused as ambiguous, `jig check` reports both files, and
+a person gives one of them a free number with `jig update KEY --number N`.
+An issue whose number cannot be read, such as a blocker whose file is gone,
+is shown by its key.
 
 ## MCP server
 
@@ -117,7 +135,7 @@ in the repository of the session. Set the client permission at the top level:
 ## Command reference
 
 ```text
-jig init [--no-hooks]
+jig init [--no-hooks] [--prefix P]
 jig start [--json|--hook-json]
 jig add TITLE [--approved] [-p|--priority N] [--body TEXT|-] [--parent ID] [--dep ID ...]
 jig ready [--json]
@@ -128,7 +146,7 @@ jig approve ID
 jig revise ID --reason TEXT
 jig claim ID [--by NAME] [--force]
 jig unclaim ID
-jig update ID [--title T] [-p|--priority N] [--body TEXT|-] [--release NAME]
+jig update ID [--title T] [-p|--priority N] [--body TEXT|-] [--release NAME] [--number N]
 jig review ID [--summary TEXT]
 jig rework ID --reason TEXT
 jig close ID --reason TEXT [--summary TEXT]
@@ -146,8 +164,8 @@ jig mcp
 A bare `jig` prints a grouped summary of these commands (same as `jig help`,
 `jig --help`, or `jig -h`). `--json` may appear before or after the command for
 read commands. `--` stops option parsing. `--body -` reads standard input;
-omitting `--body` never reads stdin. A bare six-hex suffix (`a3f8c1`) is
-accepted as shorthand for `B-a3f8c1`.
+omitting `--body` never reads stdin. `ID` is a handle (`B12`, `B12.3`), a bare
+number, or a key (see Issue numbers).
 
 Text `jig list` without arguments groups issues by status in the order `review`,
 `proposed`, `claimed`, `open`. A status, release, or chronological sort filter
@@ -211,8 +229,8 @@ A file whose `priority` is missing, `null`, or outside 0–4 is invalid:
 ## Issue documents
 
 Long analyses, measurements, implementation instructions, and review or audit
-reports for one issue live under `.jig/docs/ID/`. The directory follows the
-issue ID across status changes. People and agents write these document files
+reports for one issue live under `.jig/docs/KEY/`, named by the issue's key. The
+directory stays put across status changes and renumbering. People and agents write these document files
 directly, while `jig` does not create, edit, move, or remove them. The issue
 description keeps the current contract and can reference the documents that
 support it.
@@ -220,12 +238,12 @@ support it.
 For example:
 
 ```text
-.jig/docs/B-a3f8c1/analysis.md
-.jig/docs/B-a3f8c1/review/round-1.md
-.jig/docs/B-a3f8c1/review/round-2.md
+.jig/docs/5a3f35/analysis.md
+.jig/docs/5a3f35/review/round-1.md
+.jig/docs/5a3f35/review/round-2.md
 ```
 
-`jig show B-a3f8c1` always ends with its `Documents: .jig/docs/B-a3f8c1/`
+`jig show B12` always ends with its `Documents: .jig/docs/5a3f35/`
 line. It adds `(none)` when the directory has no files, or indents the sorted
 file paths by two spaces. JSON `show` returns the directory in `docs_dir` and
 the files in `docs`. `jig check` reports a file directly under `.jig/docs/` or

@@ -1,10 +1,10 @@
-<!-- BEGIN JIG v:1 hash:df87fb13ed5b02e5 -->
+<!-- BEGIN JIG v:1 hash:d6b52f42bac39069 -->
 ## Issue tracking with Jig
 
 This project tracks work with `jig`. Do not keep task lists in other Markdown or TODO files. Your built-in todo or plan tool is only for the steps of the current task; record anything that must outlive this session in `jig`.
 If `jig` is not installed, ask a person to install it: `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v1.0.0` (https://github.com/EntropyLogix/Jig).
 
-- Run `jig start` for the workflow. `jig ready` lists approved, unblocked work; `jig show ID` reads one issue. An issue authorizes only its described scope.
+- Run `jig start` for the workflow. `jig ready` lists approved, unblocked work; `jig show ID` reads one issue. An issue authorizes only its described scope. Refer to issues by the ID `jig` prints (for example `B12`, subtask `B12.3`), in commands and in messages; a person may give only the number (`12`).
 - Claim before working: `jig claim ID --by NAME` with your agent name. Use `--force` only when a person explicitly authorizes it for that issue.
 - Submit finished work with `jig review ID --summary TEXT`. Approving, revising, returning for rework and closing issues is for people unless a person explicitly tells you otherwise for that issue.
 - Work found along the way: `jig add TITLE --body TEXT` (it starts as a proposal, not work) and `jig note ID TEXT` on the issue where you found it.

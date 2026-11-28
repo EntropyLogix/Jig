@@ -46,13 +46,42 @@ contract and acceptance checks for v1.
   `review`) live in `.jig/open/`; closed issues live in `.jig/closed/`. The
   archive can be browsed without `jig`. Closing and reopening move the file,
   not its ID.
-- Keep existing identifiers such as `B440`. New top-level issues use `B-`
-  followed by exactly six lowercase hex digits. There is no hidden longer ID
-  or variable abbreviation. Generate the hex from a hash of a random local
-  installation identifier and fresh system randomness. The installation
-  identifier stays out of the project; do not use the IP, MAC, or hostname.
-  Check both directories under the lock and retry on a local collision.
-- Subtasks use dotted IDs (`B-a3f8c1.1`, `B-a3f8c1.1.1`). Allocate the next
+- Every issue has two identifiers with separate jobs. The **key** is the
+  internal, random identity: it names the file, the documents directory,
+  and every reference in `parent` and `depends_on`. The **handle** is what
+  people and agents read and write: the project's prefix followed by the
+  issue's number (`B494`), and for a subtask its root's handle plus the
+  dotted part of its key (`B494.2`). Jig shows handles everywhere except
+  inside paths; an issue whose number cannot be read (a missing or
+  unreadable root) is shown by its key.
+- A top-level key is six lowercase hex digits that start with a digit and
+  contain at least one letter (`5a3f35`). Generate it from a hash of a
+  random local installation identifier and fresh system randomness, and
+  retry values of any other shape. The installation identifier stays out
+  of the project; do not use the IP, MAC, or hostname. Check both
+  directories under the lock and retry on a local collision.
+- `add` gives a top-level issue the largest number in the registry, open
+  and closed, plus one, under the lock; numbers are never reused. The
+  `number:` line of a file Jig cannot read still counts, so repairing that
+  file never creates a duplicate. Copies edited independently may assign
+  the same number; identity stays intact because keys differ. A handle
+  that matches two issues is refused and names every match; `list`,
+  `ready`, and `tree` warn once per duplicate; `check` reports it. A person
+  fixes it with `jig update ID --number N` (an unused number, on a
+  top-level issue, recorded in the history); agents do not renumber.
+- The prefix is the project setting `prefix` in `.jig/config.json`
+  (`{"prefix": "B"}`), written by `jig init [--prefix P]` with default `B`:
+  1 to 8 uppercase ASCII letters, optionally followed by `-` (`B`, `AN`,
+  `AN-`). Handles are derived, so changing the prefix changes every handle
+  at once. A missing or invalid configuration stops every command except
+  `check`, which reports it, and `init`, which writes a missing one.
+- Commands take an issue as a handle (case-insensitive: `B494`, `b494.2`),
+  a bare number (`494`), or a key (`5a3f35`, for tools that read paths and
+  for references whose issue no longer exists). A handle always starts with
+  a letter, a number has none, and a key starts with a digit and has one,
+  so no input is ambiguous between the forms.
+- Subtasks use dotted keys (`5a3f35.1`, `5a3f35.1.1`) and store no number.
+  Allocate the next
   number after the largest direct child under the lock, including closed
   children. A closed child does not free its number.
 - Writes use a local lock and atomic file replacement. Processes using the
@@ -215,24 +244,26 @@ contract and acceptance checks for v1.
 
 - Long material that belongs to one issue — analyses, review or audit
   reports, measurements, instructions for an implementer — lives in
-  `.jig/docs/ID/`, where `ID` is the issue ID (dotted subtask IDs
-  included). Any files and subdirectories may be stored there; Markdown is
+  `.jig/docs/KEY/`, where `KEY` is the issue's key (dotted subtask keys
+  included), so renumbering never moves documents. Any files and
+  subdirectories may be stored there; Markdown is
   the convention. The description references the documents that matter;
   it stays the contract.
 - `jig` has no command that creates, edits, or removes documents; people
   and agents write the files directly. `init` does not create `docs/`, and
   a missing `docs/` is not a problem.
-- The directory belongs to the ID, not to a status: closing, reopening,
-  and every other transition leave `.jig/docs/ID/` where it is.
-- `show ID` ends with a `Documents: .jig/docs/ID/` line naming the
+- The directory belongs to the key, not to a status or a number: closing,
+  reopening, renumbering, and every other change leave `.jig/docs/KEY/`
+  where it is.
+- `show ID` ends with a `Documents: .jig/docs/KEY/` line naming the
   directory even when it does not exist yet, followed by the regular files
   under it, recursively, as paths relative to the project root (for example
-  `.jig/docs/B312/analysis.md`), sorted, or by `(none)` on the same line
+  `.jig/docs/5a3f35/analysis.md`), sorted, or by `(none)` on the same line
   when there are none. It does not print their contents. JSON adds
   `docs_dir` (the directory path) and `docs`, an array of the file paths
   (`[]` when there are none).
 - A broken document location never hides the issue. When `.jig/docs` or
-  `.jig/docs/ID` is not a real directory, or part of it cannot be read,
+  `.jig/docs/KEY` is not a real directory, or part of it cannot be read,
   `show` still prints the issue and its `Documents:` line (JSON with the
   files it could list), warns on stderr with the path relative to the
   project root and a pointer to `jig check`, and exits 0. `check` reports
@@ -282,7 +313,9 @@ contract and acceptance checks for v1.
     `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag vX.Y.Z`,
     where `X.Y.Z` is the version of `jig` that wrote the block;
   - run `jig start`; `jig ready` lists approved, unblocked work; `jig show ID`
-    reads one issue; an issue authorizes only its described scope;
+    reads one issue; an issue authorizes only its described scope; refer to
+    issues by the handle `jig` prints, in commands and in messages, and a
+    person may give only the number;
   - claim before working with `jig claim ID --by NAME` using the agent's
     name; `--force` only on a person's explicit instruction for that issue;
   - submit with `jig review ID --summary TEXT`; approving, revising,
@@ -321,9 +354,10 @@ contract and acceptance checks for v1.
   `open` issue with `claim_id` or `assignee`, a `claimed` issue without
   `claim_id`, or `closed_at`, `release`, or a closing summary on an active
   issue), a pending or mismatched move record, an unreadable `memory.md`,
+  a missing or invalid `.jig/config.json`, a number used by two issues,
   unexpected files in `open/` or `closed/`, an entry in `.jig/docs/` that
-  is not a directory or is not named after an existing issue ID (hint:
-  rename it to the issue ID or remove it), and the legacy
+  is not a directory or is not named after an existing issue key (hint:
+  rename it to the issue key or remove it), and the legacy
   `/.*.tmp-*` rule in `.jig/.gitignore`.
 - Unknown legacy metadata is not a problem: a `closed` issue may have
   `closed_at: null`, and an issue in `review` may have no `assignee` or
@@ -389,7 +423,9 @@ contract and acceptance checks for v1.
 - **Reopening a summarized issue.** Preserve the former closing summary
   verbatim in `## History` and remove the top section on `reopen`. That way
   the active issue does not present an old outcome as its current summary.
-- **On-disk format.** Fixed, one-line YAML fields: `id`, `title`, `status`,
+- **On-disk format.** Fixed, one-line YAML fields: `id` (the key), `number`
+  (a positive integer on a top-level issue, `null` on a subtask),
+  `title`, `status`,
   `priority`, `parent`, `depends_on`, `assignee`, `defer_until`, `created_at`,
   `updated_at`, `closed_at`, and `release`. Add a nullable `claim_id` to
   distinguish independent claims, even with identical or absent assignee
@@ -404,16 +440,18 @@ contract and acceptance checks for v1.
   every file has the key, and a file without it is invalid like one without
   any other fixed key. Reserve
   top-level `## Closing Summary`, `## History`, and `## Notes` for the managed
-  sections. No project `config.json` until a real per-project setting is
-  needed.
+  sections. `.jig/config.json` holds the per-project settings; today only
+  `prefix`, and an unknown key makes it invalid.
 - **Dates and readiness.** New timestamps use UTC. `defer_until` is a UTC
   calendar date; the issue is eligible on that day. Sort `ready` by priority
   (0 highest; new issues default to 2), then creation date, then ID. `list`
-  without a filter shows all active statuses. Allow an exact six-hex ID
-  without `B-` as in the source specification, but no shorter prefix match.
-- **Read JSON.** `ready` and `list` return arrays of `{id,title,status,
-  priority,assignee}`. `tree` returns a recursive `{id,title,status,children}`
-  object. `show` returns the issue's metadata (excluding internal `claim_id`)
+  without a filter shows all active statuses. Issue references follow
+  Files, IDs, And Concurrent Work.
+- **Read JSON.** `id` is always the handle and `key` the key; `parent`,
+  `depends_on`, and readiness lists hold handles. `ready` and `list` return
+  arrays of `{id,key,title,status,priority,assignee}`. `tree` returns a
+  recursive `{id,key,title,status,children}` object. `show` returns the
+  issue's metadata (excluding internal `claim_id`)
   and `body`, `history`, `notes`, and `closing_summary` as separate Markdown
   values (`closing_summary` is `null` when absent), plus `readiness` (see
   Issue Workflow) and `docs_dir` and `docs` (see Issue Documents). `start`
@@ -468,6 +506,11 @@ contract and acceptance checks for v1.
 
 ## Acceptance Checks
 
+- A new registry numbers issues from `B1` (or the configured prefix);
+  subtasks show their root's number; closed issues keep their numbers; a
+  changed prefix changes every handle; no output outside paths contains a
+  key of an issue whose number is readable; a duplicated number is warned,
+  refused when used, reported by `check`, and fixed with `update --number`.
 - Initialize and use a registry without Git. Discover it from a subdirectory
   without silently picking a different checkout.
 - Race two real `claim` processes against one registry and verify exactly
@@ -519,13 +562,13 @@ contract and acceptance checks for v1.
 - `show` gives `Ready: yes` for a ready issue and, for one issue that is
   deferred, blocked, and waiting for a subtask at once, `Ready: no` with all
   three reasons in the agreed order; JSON `readiness` carries the same.
-- `show` of an issue without documents prints `Documents: .jig/docs/ID/
+- `show` of an issue without documents prints `Documents: .jig/docs/KEY/
   (none)` and JSON `docs: []` with `docs_dir`. Put files, including one in
-  a subdirectory, in `.jig/docs/ID/`: `show` lists their paths in text and
+  a subdirectory, in `.jig/docs/KEY/`: `show` lists their paths in text and
   in JSON `docs`; `close` and `reopen` leave
   them in place. A directory in `.jig/docs/` named after no issue and a
   plain file directly in `.jig/docs/` are reported by `check`; a registry
-  without `docs/` is clean. With `.jig/docs/ID` replaced by a file, `show`
+  without `docs/` is clean. With `.jig/docs/KEY` replaced by a file, `show`
   prints the issue, warns with the relative path, and exits 0.
 - With issues in every status, `list` prints the non-empty groups in the
   order `review`, `proposed`, `claimed`, `open` with counts and rows in the

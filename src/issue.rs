@@ -39,6 +39,7 @@ impl Status {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Issue {
     pub id: String,
+    pub number: Option<u64>,
     pub title: String,
     pub status: Status,
     pub priority: u8,
@@ -59,8 +60,9 @@ pub struct Issue {
 
 pub(crate) const BAD_PRIORITY: &str = "field priority must be an integer from 0 to 4";
 
-const KEYS: [&str; 13] = [
+const KEYS: [&str; 14] = [
     "id",
+    "number",
     "title",
     "status",
     "priority",
@@ -86,25 +88,8 @@ pub fn valid_release(text: &str) -> bool {
     valid_label(text) && text.trim() == text
 }
 
-pub fn valid_id(id: &str) -> bool {
-    let (stem, suffix) = match id.split_once('.') {
-        Some((s, t)) => (s, Some(t)),
-        None => (id, None),
-    };
-    let stem_ok = if let Some(hex) = stem.strip_prefix("B-") {
-        hex.len() == 6
-            && hex
-                .bytes()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-    } else if let Some(digits) = stem.strip_prefix('B') {
-        !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit())
-    } else {
-        false
-    };
-    if !stem_ok {
-        return false;
-    }
-    match suffix {
+fn dotted_suffix_ok(rest: Option<&str>) -> bool {
+    match rest {
         None => true,
         Some(rest) => rest.split('.').all(|part| {
             !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()) && !part.starts_with('0')
@@ -112,25 +97,93 @@ pub fn valid_id(id: &str) -> bool {
     }
 }
 
-pub fn id_alias(id: &str) -> Option<String> {
-    if valid_id(id) {
-        return Some(id.to_string());
-    }
-    let (stem, suffix) = match id.split_once('.') {
-        Some((s, t)) => (s, format!(".{t}")),
-        None => (id, String::new()),
-    };
-    if stem.len() == 6
+pub fn valid_root_key(stem: &str) -> bool {
+    stem.len() == 6
+        && stem.as_bytes()[0].is_ascii_digit()
         && stem
             .bytes()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-    {
-        let candidate = format!("B-{stem}{suffix}");
-        if valid_id(&candidate) {
-            return Some(candidate);
-        }
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        && stem.bytes().any(|c| (b'a'..=b'f').contains(&c))
+}
+
+pub fn valid_key(key: &str) -> bool {
+    let (stem, suffix) = match key.split_once('.') {
+        Some((s, t)) => (s, Some(t)),
+        None => (key, None),
+    };
+    valid_root_key(stem) && dotted_suffix_ok(suffix)
+}
+
+pub fn root_key(key: &str) -> &str {
+    key.split_once('.').map_or(key, |(stem, _)| stem)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Reference {
+    Key(String),
+    Number { number: u64, suffix: String },
+}
+
+fn valid_number(digits: &str) -> Option<u64> {
+    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
     }
-    None
+    digits.parse().ok()
+}
+
+pub fn parse_reference(raw: &str, prefix: &str) -> Option<Reference> {
+    if valid_key(raw) {
+        return Some(Reference::Key(raw.to_string()));
+    }
+    let lowered = raw.to_ascii_lowercase();
+    let wanted = prefix.to_ascii_lowercase();
+    let rest = lowered.strip_prefix(&wanted).unwrap_or(&lowered);
+    let (stem, suffix) = match rest.split_once('.') {
+        Some((stem, tail)) => (stem, Some(tail)),
+        None => (rest, None),
+    };
+    let number = valid_number(stem)?;
+    if !dotted_suffix_ok(suffix) {
+        return None;
+    }
+    Some(Reference::Number {
+        number,
+        suffix: suffix.map(|tail| format!(".{tail}")).unwrap_or_default(),
+    })
+}
+
+pub fn reference_syntax(raw: &str) -> bool {
+    if valid_key(raw) {
+        return true;
+    }
+    let letters = raw.bytes().take_while(u8::is_ascii_alphabetic).count();
+    let rest = &raw[letters..];
+    let rest = if letters > 0 {
+        rest.strip_prefix('-').unwrap_or(rest)
+    } else {
+        rest
+    };
+    if letters > 8 {
+        return false;
+    }
+    let (stem, suffix) = match rest.split_once('.') {
+        Some((stem, tail)) => (stem, Some(tail)),
+        None => (rest, None),
+    };
+    valid_number(stem).is_some() && dotted_suffix_ok(suffix)
+}
+
+pub fn valid_prefix(prefix: &str) -> bool {
+    let letters = prefix.strip_suffix('-').unwrap_or(prefix);
+    (1..=8).contains(&letters.len()) && letters.bytes().all(|c| c.is_ascii_uppercase())
+}
+
+pub fn handle(prefix: &str, number: u64, key: &str) -> String {
+    let suffix = key.split_once('.').map(|(_, tail)| tail);
+    match suffix {
+        Some(tail) => format!("{prefix}{number}.{tail}"),
+        None => format!("{prefix}{number}"),
+    }
 }
 
 pub fn esc(s: &str) -> String {
@@ -177,6 +230,10 @@ pub fn encode(issue: &Issue) -> Result<String, String> {
     }
     let mut out = String::from("---\n");
     field_str(&mut out, "id", &issue.id);
+    match issue.number {
+        Some(number) => out.push_str(&format!("number: {number}\n")),
+        None => out.push_str("number: null\n"),
+    }
     field_str(&mut out, "title", &issue.title);
     out.push_str("status: ");
     out.push_str(issue.status.as_str());
@@ -231,8 +288,13 @@ pub fn encode(issue: &Issue) -> Result<String, String> {
 }
 
 fn validate(issue: &Issue) -> Result<(), String> {
-    if !valid_id(&issue.id) {
-        return Err(format!("invalid issue id {:?}", issue.id));
+    if !valid_key(&issue.id) {
+        return Err(format!("invalid issue key {:?}", issue.id));
+    }
+    match (issue.id.contains('.'), issue.number) {
+        (false, None) => return Err("field number must be a positive integer".to_string()),
+        (true, Some(_)) => return Err("field number must be null on a subtask".to_string()),
+        _ => {}
     }
     if !valid_label(&issue.title) {
         return Err("title must be a non-empty single line".to_string());
@@ -253,17 +315,17 @@ fn validate(issue: &Issue) -> Result<(), String> {
         );
     }
     if issue.parent.as_deref() != issue.id.rsplit_once('.').map(|(parent, _)| parent) {
-        return Err("parent must match the dotted issue id".to_string());
+        return Err("parent must match the dotted issue key".to_string());
     }
     if let Some(parent) = &issue.parent
-        && !valid_id(parent)
+        && !valid_key(parent)
     {
-        return Err(format!("invalid parent id {parent:?}"));
+        return Err(format!("invalid parent key {parent:?}"));
     }
     let mut seen_deps = std::collections::HashSet::new();
     for dep in &issue.depends_on {
-        if !valid_id(dep) {
-            return Err(format!("invalid dependency id {dep:?}"));
+        if !valid_key(dep) {
+            return Err(format!("invalid dependency key {dep:?}"));
         }
         if dep == &issue.id {
             return Err("issue cannot depend on itself".to_string());
@@ -385,10 +447,19 @@ enum Value {
     Str(String),
     List(Vec<String>),
     Priority(u8),
+    Number(u64),
 }
 
 fn parse_value(raw: &str, key: &str) -> Result<Value, String> {
     let s = raw.trim_matches([' ', '\t']);
+    if key == "number" {
+        if s == "null" {
+            return Ok(Value::Null);
+        }
+        return valid_number(s)
+            .map(Value::Number)
+            .ok_or_else(|| format!("field number must be a positive integer or null; got {s:?}"));
+    }
     if key == "priority" {
         return match s.as_bytes() {
             [p @ b'0'..=b'4'] => Ok(Value::Priority(p - b'0')),
@@ -684,6 +755,10 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
     let get = |name: &str| fields.iter().find(|(k, _)| k == name).unwrap().1.clone();
 
     let id = want_str(get("id"), "id")?;
+    let number = match get("number") {
+        Value::Number(n) => Some(n),
+        _ => None,
+    };
     let title = want_str(get("title"), "title")?;
     let status_raw = match get("status") {
         Value::Str(s) => s,
@@ -749,6 +824,7 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
 
     let issue = Issue {
         id,
+        number,
         title,
         status,
         priority,
@@ -772,12 +848,13 @@ pub fn decode(markdown: &str) -> Result<Issue, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Issue, Status, decode, encode, id_alias, valid_id};
+    use super::{Issue, Reference, Status, decode, encode, handle, parse_reference, valid_key};
     use crate::text::TextKind;
 
     fn open_issue(body: &str) -> Issue {
         Issue {
-            id: "B-abc123".into(),
+            id: "1abc23".into(),
+            number: Some(1),
             title: "t".into(),
             status: Status::Open,
             priority: 2,
@@ -817,6 +894,10 @@ mod tests {
             ("title", "\"a\" # c"),
             ("title", "[B1]"),
             ("parent", "B440"),
+            ("number", "0"),
+            ("number", "\"1\""),
+            ("number", "null"),
+            ("number", "x"),
             ("created_at", "~"),
             ("created_at", "2020-05-04"),
             ("claim_id", "'x'"),
@@ -835,16 +916,19 @@ mod tests {
         }
         let escaped = text.replace("title: \"t\"", "title: \"a\\u0142b\"");
         assert_eq!(decode(&escaped).unwrap().title, "a\u{0142}b");
-        let legacy = text
-            .replace("id: \"B-abc123\"", "id: \"B440.2\"")
-            .replace("parent: null", "parent: \"B440\"")
+        let subtask = text
+            .replace("id: \"1abc23\"", "id: \"1abc23.2\"")
+            .replace("number: 1", "number: null")
+            .replace("parent: null", "parent: \"1abc23\"")
             .replace(
                 "created_at: \"2026-01-02T03:04:05Z\"",
                 "created_at: \"2020-05-04\"",
             );
-        let issue = decode(&legacy).unwrap();
-        assert_eq!((issue.id.as_str(), issue.priority), ("B440.2", 2));
+        let issue = decode(&subtask).unwrap();
+        assert_eq!((issue.id.as_str(), issue.number), ("1abc23.2", None));
         assert_eq!(issue.created_at.as_deref(), Some("2020-05-04"));
+        let numbered_subtask = subtask.replace("number: null", "number: 3");
+        assert!(decode(&numbered_subtask).unwrap_err().contains("number"));
     }
 
     #[test]
@@ -865,15 +949,41 @@ mod tests {
     }
 
     #[test]
-    fn ids_and_aliases() {
-        for id in ["B-abcdef", "B-abcdef.2.10", "B440"] {
-            assert!(valid_id(id), "{id}");
+    fn keys_references_and_handles() {
+        for key in ["1abcde", "9f0000.2.10", "0a1b2c"] {
+            assert!(valid_key(key), "{key}");
         }
-        for id in ["B-abcdef.0", "B-abcdef.02", "abcdef", "B-ABC123"] {
-            assert!(!valid_id(id), "{id}");
+        for key in [
+            "abcdef",
+            "123456",
+            "1abcde.0",
+            "1abcde.02",
+            "1ABCDE",
+            "B-1abcde",
+            "B440",
+        ] {
+            assert!(!valid_key(key), "{key}");
         }
-        assert_eq!(id_alias("abcdef").as_deref(), Some("B-abcdef"));
-        assert_eq!(id_alias("abcdef.2").as_deref(), Some("B-abcdef.2"));
+        let number = |number, suffix: &str| Reference::Number {
+            number,
+            suffix: suffix.to_string(),
+        };
+        assert_eq!(parse_reference("B12", "B"), Some(number(12, "")));
+        assert_eq!(parse_reference("b12.3", "B"), Some(number(12, ".3")));
+        assert_eq!(parse_reference("12", "B"), Some(number(12, "")));
+        assert_eq!(parse_reference("AN-7", "AN-"), Some(number(7, "")));
+        assert_eq!(parse_reference("an-7", "AN-"), Some(number(7, "")));
+        assert_eq!(
+            parse_reference("1abcde.2", "B"),
+            Some(Reference::Key("1abcde.2".into()))
+        );
+        for raw in ["B012", "B-12", "AN7", "X12", "B12.0", "B", ""] {
+            let prefix = if raw.starts_with("AN") { "AN-" } else { "B" };
+            assert_eq!(parse_reference(raw, prefix), None, "{raw}");
+        }
+        assert_eq!(parse_reference("A12345", "A"), Some(number(12345, "")));
+        assert_eq!(handle("B", 12, "1abcde"), "B12");
+        assert_eq!(handle("AN-", 12, "1abcde.3.1"), "AN-12.3.1");
     }
 
     #[test]

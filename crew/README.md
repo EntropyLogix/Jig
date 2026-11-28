@@ -22,7 +22,7 @@ In Codex, start a role with `$jig-crew dev ID claude-dev` and so on.
 
 The architect works only on `proposed` issues and writes no code: it
 rewrites the description as the contract, keeps the analysis in
-`.jig/docs/ID/architecture.md`, may split the work into subtasks, and
+`.jig/docs/KEY/architecture.md`, may split the work into subtasks, and
 leaves a `jig note --by architect`. The developer, auditors, and lead see
 the issue's and its ancestors' `architecture.md` under `Read:`; the
 developer also sees whether the architect reviewed the issue, and on large
@@ -30,7 +30,7 @@ unreviewed work asks the person whether to hand it to the architect first.
 
 A round is one `jig review`; its number is the count of review submissions
 in the issue's history. Documents live in
-`.jig/docs/ID/review/round-NN/`. While an issue is in `review` its code is
+`.jig/docs/KEY/review/round-NN/`. While an issue is in `review` its code is
 frozen: the developer records a fingerprint of the working tree in the
 handoff, and auditors and the lead are warned when the code no longer
 matches it.

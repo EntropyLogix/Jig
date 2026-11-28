@@ -1,8 +1,10 @@
 use crate::clock;
+use crate::config;
 use crate::domain;
 use crate::instructions;
 use crate::issue::{Issue, Status};
 use crate::memory;
+use crate::names::Names;
 use crate::store::{self, Place};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -45,10 +47,14 @@ pub enum ProblemKind {
     MissingParent,
     MissingBlocker,
     UnresolvedReference,
+    ConfigFile,
+    ConfigMissing,
+    ConfigInvalid,
+    DuplicateNumber,
 }
 
 impl ProblemKind {
-    pub const ALL: [ProblemKind; 35] = [
+    pub const ALL: [ProblemKind; 39] = [
         ProblemKind::IssueDirectory,
         ProblemKind::IssueDirectoryUnlistable,
         ProblemKind::IssueEntryUnlistable,
@@ -84,6 +90,10 @@ impl ProblemKind {
         ProblemKind::MissingParent,
         ProblemKind::MissingBlocker,
         ProblemKind::UnresolvedReference,
+        ProblemKind::ConfigFile,
+        ProblemKind::ConfigMissing,
+        ProblemKind::ConfigInvalid,
+        ProblemKind::DuplicateNumber,
     ];
 }
 
@@ -119,6 +129,7 @@ pub(crate) struct Record {
 }
 
 pub(crate) struct Snapshot {
+    reserved: Vec<u64>,
     usable: BTreeMap<String, Issue>,
     unavailable: BTreeMap<String, Unavailable>,
     children: BTreeMap<String, Vec<ChildRef>>,
@@ -152,6 +163,17 @@ impl Snapshot {
             });
         }
         Err(domain::ResolveError::Missing { id: id.to_string() })
+    }
+
+    pub(crate) fn names(&self, prefix: &str) -> Names {
+        let mut names = Names::new(prefix);
+        for record in &self.records {
+            names.add(&record.issue, record.path.clone());
+        }
+        for number in &self.reserved {
+            names.reserve(*number);
+        }
+        names
     }
 
     pub(crate) fn issues(&self) -> impl Iterator<Item = &Issue> {
@@ -214,7 +236,14 @@ fn rel(place: Place, name: &std::ffi::OsStr) -> PathBuf {
     PathBuf::from(".jig").join(place.dir()).join(name)
 }
 
+fn stray_number(text: &str) -> Option<u64> {
+    text.lines()
+        .find_map(|line| line.strip_prefix("number: "))
+        .and_then(|value| value.trim().parse().ok())
+}
+
 pub(crate) fn scan(jig: &Path) -> Snapshot {
+    let mut reserved = Vec::new();
     let mut records = Vec::new();
     let mut problems = Vec::new();
     let mut claimants: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
@@ -310,6 +339,14 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                         )
                     };
                     problems.push(Problem::at(kind, path, e, hint));
+                    if !stem.contains('.')
+                        && let Some(number) = fs::read_to_string(ent.path())
+                            .ok()
+                            .as_deref()
+                            .and_then(stray_number)
+                    {
+                        reserved.push(number);
+                    }
                     parse_failures.push((stem, rel(place, &ent.file_name())));
                 }
                 Ok((issue, _)) => {
@@ -338,14 +375,14 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             problems.push(Problem::at(
                 ProblemKind::DuplicateId,
                 path.clone(),
-                format!("duplicate issue id {id}"),
+                format!("duplicate issue key {id}"),
                 "keep one record for this issue and remove the others",
             ));
         }
         unavailable.insert(
             id.clone(),
             Unavailable {
-                reason: "duplicate issue id".to_string(),
+                reason: "duplicate issue key".to_string(),
                 path: paths[0].clone(),
             },
         );
@@ -361,18 +398,18 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
             problems.push(Problem::at(
                 ProblemKind::FileNameMismatch,
                 rec.path.clone(),
-                format!("file name does not match issue id {}", rec.issue.id),
+                format!("file name does not match issue key {}", rec.issue.id),
                 format!("rename the file to {}.md or fix the id field", rec.issue.id),
             ));
             rec.usable = false;
             unavailable
                 .entry(rec.issue.id.clone())
                 .or_insert_with(|| Unavailable {
-                    reason: "file name does not match issue id".to_string(),
+                    reason: "file name does not match issue key".to_string(),
                     path: rec.path.clone(),
                 });
             unavailable.entry(stem).or_insert_with(|| Unavailable {
-                reason: format!("file decodes as issue {}", rec.issue.id),
+                reason: format!("file decodes as issue key {}", rec.issue.id),
                 path: rec.path.clone(),
             });
             continue;
@@ -451,6 +488,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
     }
     problems.sort_by(|a, b| a.path.cmp(&b.path).then(a.problem.cmp(&b.problem)));
     Snapshot {
+        reserved,
         usable,
         unavailable,
         children,
@@ -459,7 +497,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
     }
 }
 
-fn dependency_cycles(snap: &Snapshot) -> Vec<Problem> {
+fn dependency_cycles(snap: &Snapshot, names: &Names) -> Vec<Problem> {
     let mut graph: BTreeMap<&str, &Issue> = BTreeMap::new();
     let mut ambiguous: BTreeSet<String> = BTreeSet::new();
     for rec in &snap.records {
@@ -517,16 +555,24 @@ fn dependency_cycles(snap: &Snapshot) -> Vec<Problem> {
                     if !reported.insert(cycle.clone()) {
                         continue;
                     }
-                    let mut display = cycle.join(" -> ");
+                    let mut display = cycle
+                        .iter()
+                        .map(|key| names.name(key))
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
                     display.push_str(" -> ");
-                    display.push_str(&first);
+                    display.push_str(&names.name(&first));
                     problems.push(Problem::at(
                         ProblemKind::DependencyCycle,
                         PathBuf::from(".jig")
                             .join(Place::of(graph[first.as_str()].status).dir())
                             .join(format!("{first}.md")),
                         format!("dependency cycle {display}"),
-                        format!("remove one edge, e.g. `jig dep rm {last} {first}`"),
+                        format!(
+                            "remove one edge, e.g. `jig dep rm {} {}`",
+                            names.name(&last),
+                            names.name(&first)
+                        ),
                     ));
                 }
                 _ => {
@@ -651,6 +697,61 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
     let mut problems = snap.problems.clone();
     problems.extend(issue_docs_problems(jig, &snap));
 
+    let rel_config = PathBuf::from(".jig/config.json");
+    let mut prefix = None;
+    match store::metadata_cause(&jig.join(config::FILE), false) {
+        Err(e) => problems.push(Problem::at(
+            ProblemKind::ConfigFile,
+            rel_config.clone(),
+            e,
+            "restore .jig/config.json as a regular file",
+        )),
+        Ok(None) => problems.push(Problem::at(
+            ProblemKind::ConfigMissing,
+            rel_config.clone(),
+            "config.json is missing",
+            "run `jig init` to write the default configuration",
+        )),
+        Ok(Some(_)) => match config::read(jig) {
+            Ok(loaded) => prefix = Some(loaded.prefix),
+            Err(e) => problems.push(Problem::at(
+                ProblemKind::ConfigInvalid,
+                rel_config,
+                e,
+                format!(
+                    "write {{\"prefix\": \"{}\"}} or another valid prefix ({})",
+                    config::DEFAULT_PREFIX,
+                    config::PREFIX_RULE
+                ),
+            )),
+        },
+    }
+    let names = match &prefix {
+        Some(prefix) => snap.names(prefix),
+        None => Names::new(""),
+    };
+    if prefix.is_some() {
+        for (number, roots) in names.duplicates() {
+            for root in roots {
+                let others = roots
+                    .iter()
+                    .filter(|other| other.key != root.key)
+                    .map(|other| other.path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                problems.push(Problem::at(
+                    ProblemKind::DuplicateNumber,
+                    root.path.clone(),
+                    format!("number {}{number} is also used by {others}", names.prefix),
+                    format!(
+                        "a person gives one of them an unused number: `jig update {} --number N`",
+                        root.key
+                    ),
+                ));
+            }
+        }
+    }
+
     let rel_mem = PathBuf::from(".jig/memory.md");
     match store::metadata_cause(&jig.join("memory.md"), false) {
         Err(e) => problems.push(Problem::at(
@@ -761,9 +862,10 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
             problems.push(Problem::at(
                 ProblemKind::MissingParent,
                 rec.path.clone(),
-                format!("parent {parent}: {e}"),
+                format!("parent {}: {}", names.name(parent), e.text(&names)),
                 format!(
-                    "restore the issue file for {parent} or edit parent in {}",
+                    "restore the issue file for {} or edit parent in {}",
+                    names.name(parent),
                     rec.path.display()
                 ),
             ));
@@ -773,10 +875,12 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                 problems.push(Problem::at(
                     ProblemKind::MissingBlocker,
                     rec.path.clone(),
-                    format!("blocker {dep}: {e}"),
+                    format!("blocker {}: {}", names.name(dep), e.text(&names)),
                     format!(
-                        "restore the issue file for {dep} or run `jig dep rm {} {dep}`",
-                        rec.issue.id
+                        "restore the issue file for {} or run `jig dep rm {} {}`",
+                        names.name(dep),
+                        names.name(&rec.issue.id),
+                        names.name(dep)
                     ),
                 ));
             }
@@ -820,14 +924,14 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                 problems.push(Problem::at(
                     ProblemKind::UnresolvedReference,
                     rec.path.clone(),
-                    format!("unresolved {reference}"),
+                    format!("unresolved {}", reference.text(&names)),
                     "fix or restore the referenced issue; see the other reported problems",
                 ));
             }
         }
     }
 
-    problems.extend(dependency_cycles(&snap));
+    problems.extend(dependency_cycles(&snap, &names));
     problems.sort_by(|a, b| a.path.cmp(&b.path).then(a.problem.cmp(&b.problem)));
     problems
 }

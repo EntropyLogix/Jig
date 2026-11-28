@@ -1,5 +1,5 @@
 use crate::issue::{Issue, Status};
-use std::fmt;
+use crate::names::Names;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -14,13 +14,15 @@ pub(crate) enum ResolveError {
     },
 }
 
-impl fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ResolveError {
+    pub(crate) fn text(&self, names: &Names) -> String {
         match self {
-            ResolveError::Missing { id } => write!(f, "missing issue {id}"),
-            ResolveError::Unusable { id, path, reason } => {
-                write!(f, "issue {id} is unusable: {reason} ({})", path.display())
-            }
+            ResolveError::Missing { id } => format!("missing issue {}", names.name(id)),
+            ResolveError::Unusable { id, path, reason } => format!(
+                "issue {} is unusable: {reason} ({})",
+                names.name(id),
+                path.display()
+            ),
         }
     }
 }
@@ -42,15 +44,24 @@ pub(crate) enum Unresolved {
     Own(PathBuf),
 }
 
-impl fmt::Display for Unresolved {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Unresolved {
+    pub(crate) fn text(&self, names: &Names) -> String {
         match self {
-            Unresolved::Missing { role, id } => write!(f, "{role} {id} (missing)"),
+            Unresolved::Missing { role, id } => format!("{role} {} (missing)", names.name(id)),
             Unresolved::Unusable { role, id, path } => {
-                write!(f, "{role} {id} (unusable {})", path.display())
+                format!("{role} {} (unusable {})", names.name(id), path.display())
             }
-            Unresolved::Subtask { path } => write!(f, "subtask {} (unusable)", path.display()),
-            Unresolved::Own(path) => write!(f, "{}", path.display()),
+            Unresolved::Subtask { path } => format!("subtask {} (unusable)", path.display()),
+            Unresolved::Own(path) => path.display().to_string(),
+        }
+    }
+
+    fn sort_key(&self) -> String {
+        match self {
+            Unresolved::Missing { role, id } => format!("{role} {id}"),
+            Unresolved::Unusable { role, id, .. } => format!("{role} {id}"),
+            Unresolved::Subtask { path } => format!("subtask {}", path.display()),
+            Unresolved::Own(path) => path.display().to_string(),
         }
     }
 }
@@ -89,7 +100,7 @@ impl Action {
     }
 }
 
-pub(crate) fn transition(issue: &Issue, action: Action) -> Result<Status, String> {
+pub(crate) fn transition(issue: &Issue, shown: &str, action: Action) -> Result<Status, String> {
     use Action::*;
     use Status::{Claimed, Closed, Open, Proposed};
     let next = match (action, issue.status) {
@@ -101,11 +112,10 @@ pub(crate) fn transition(issue: &Issue, action: Action) -> Result<Status, String
         (Rework, Status::Review) => Claimed,
         (Close, Proposed | Open | Claimed | Status::Review) => Closed,
         (Reopen, Closed) => Open,
-        (Claim, Proposed) => return Err(format!("issue {} awaits approval", issue.id)),
+        (Claim, Proposed) => return Err(format!("issue {shown} awaits approval")),
         (Claim, Claimed) => {
             return Err(format!(
-                "issue {} already claimed{}",
-                issue.id,
+                "issue {shown} already claimed{}",
                 issue
                     .assignee
                     .as_deref()
@@ -113,13 +123,12 @@ pub(crate) fn transition(issue: &Issue, action: Action) -> Result<Status, String
                     .unwrap_or_default()
             ));
         }
-        (Claim, Status::Review) => return Err(format!("issue {} is in review", issue.id)),
-        (Close, Closed) => return Err(format!("issue {} is already closed", issue.id)),
-        (Reopen, _) => return Err(format!("issue {} is already open", issue.id)),
+        (Claim, Status::Review) => return Err(format!("issue {shown} is in review")),
+        (Close, Closed) => return Err(format!("issue {shown} is already closed")),
+        (Reopen, _) => return Err(format!("issue {shown} is already open")),
         _ => {
             return Err(format!(
-                "issue {} is {} and cannot {}",
-                issue.id,
+                "issue {shown} is {} and cannot {}",
                 issue.status.as_str(),
                 action.as_str()
             ));
@@ -186,7 +195,7 @@ impl Eligibility {
             && self.subtasks.is_empty()
     }
 
-    pub(crate) fn reason_text(&self, check_hint: bool) -> String {
+    pub(crate) fn reason_text(&self, names: &Names, check_hint: bool) -> String {
         let mut parts = Vec::new();
         if let Some(status) = &self.status {
             parts.push(format!("status {status}"));
@@ -194,18 +203,24 @@ impl Eligibility {
         if let Some(until) = &self.deferred_until {
             let mut text = format!("deferred until {until}");
             if let Some(by) = &self.deferred_by {
-                text.push_str(&format!(" by ancestor {by}"));
+                text.push_str(&format!(" by ancestor {}", names.name(by)));
             }
             parts.push(text);
         }
         for reference in &self.unresolved {
-            parts.push(format!("unresolved {reference}"));
+            parts.push(format!("unresolved {}", reference.text(names)));
         }
+        let named = |keys: &[String]| {
+            keys.iter()
+                .map(|key| names.name(key))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         if !self.blockers.is_empty() {
-            parts.push(format!("blocked by {}", self.blockers.join(", ")));
+            parts.push(format!("blocked by {}", named(&self.blockers)));
         }
         if !self.subtasks.is_empty() {
-            parts.push(format!("waiting for subtasks {}", self.subtasks.join(", ")));
+            parts.push(format!("waiting for subtasks {}", named(&self.subtasks)));
         }
         let mut result = parts.join("; ");
         if check_hint && !self.unresolved.is_empty() {
@@ -281,7 +296,7 @@ pub(crate) fn eligibility(
             .into_iter()
             .map(|path| Unresolved::Subtask { path }),
     );
-    out.unresolved.sort_by_key(ToString::to_string);
+    out.unresolved.sort_by_key(Unresolved::sort_key);
     out.unresolved.dedup();
     out
 }

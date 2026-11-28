@@ -131,10 +131,19 @@ fn validate_children(jig: &Path) -> Result<(), String> {
     }
     metadata_of(&jig.join(".gitignore"), false)?;
     metadata_of(&jig.join("memory.md"), false)?;
+    metadata_of(&jig.join(crate::config::FILE), false)?;
     Ok(())
 }
 
-pub fn init(cwd: &Path) -> Result<bool, String> {
+pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
+    if let Some(prefix) = prefix
+        && !crate::issue::valid_prefix(prefix)
+    {
+        return Err(format!(
+            "invalid prefix {prefix:?}; {}",
+            crate::config::PREFIX_RULE
+        ));
+    }
     let jig = cwd.join(".jig");
     if metadata_of(&jig, true)?.is_some() {
         validate_children(&jig)?;
@@ -182,6 +191,20 @@ pub fn init(cwd: &Path) -> Result<bool, String> {
     if metadata_of(&jig.join("memory.md"), false)?.is_none() {
         atomic_write(&jig.join("memory.md"), MEMORY_INIT.as_bytes())?;
         created = true;
+    }
+    let config_path = jig.join(crate::config::FILE);
+    if metadata_of(&config_path, false)?.is_none() {
+        let prefix = prefix.unwrap_or(crate::config::DEFAULT_PREFIX);
+        atomic_write(&config_path, crate::config::render(prefix).as_bytes())?;
+        created = true;
+    } else if let Some(prefix) = prefix {
+        let current = crate::config::load(&jig)?;
+        if current.prefix != prefix {
+            return Err(format!(
+                "this registry uses prefix {:?}; edit .jig/config.json to change it",
+                current.prefix
+            ));
+        }
     }
     Ok(created)
 }
@@ -486,7 +509,7 @@ fn load_file(place: Place, path: PathBuf) -> Result<Loaded, String> {
     let want_name = format!("{}.md", issue.id);
     if path.file_name().and_then(|n| n.to_str()) != Some(want_name.as_str()) {
         return Err(format!(
-            "{rel}: file name does not match issue id {}",
+            "{rel}: file name does not match issue key {}",
             issue.id
         ));
     }
@@ -534,7 +557,7 @@ pub fn load_all(jig: &Path) -> Result<Vec<Loaded>, String> {
     let mut seen = std::collections::HashSet::new();
     for l in &all {
         if !seen.insert(l.issue.id.as_str()) {
-            return Err(format!("duplicate issue id {}", l.issue.id));
+            return Err(format!("duplicate issue key {}", l.issue.id));
         }
     }
     Ok(all)
@@ -552,7 +575,7 @@ pub fn find(jig: &Path, id: &str) -> Result<Option<Loaded>, String> {
             continue;
         }
         if found.is_some() {
-            return Err(format!("duplicate issue id {id}"));
+            return Err(format!("duplicate issue key {id}"));
         }
         found = Some(l);
     }
@@ -683,11 +706,11 @@ mod tests {
         fs::create_dir(&jig).unwrap();
         fs::create_dir(jig.join("open")).unwrap();
         fs::create_dir(jig.join("closed")).unwrap();
-        let old = "---\nid: \"B-000001\"\ntitle: \"T\"\nstatus: open\npriority: 2\nparent: null\n\
+        let old = "---\nid: \"1aaaaa\"\nnumber: 1\ntitle: \"T\"\nstatus: open\npriority: 2\nparent: null\n\
             depends_on: []\nassignee: null\ndefer_until: null\ncreated_at: null\n\
             updated_at: null\nclosed_at: null\nrelease: null\nclaim_id: null\n---\n\n## History\n\n## Notes\n\n";
         let new = old.replace("status: open", "status: closed");
-        fs::write(jig.join("open/B-000001.md"), old).unwrap();
+        fs::write(jig.join("open/1aaaaa.md"), old).unwrap();
 
         let calls = AtomicUsize::new(0);
         let observed: Result<crate::issue::Status, String> =
@@ -703,12 +726,11 @@ mod tests {
                     journal.push_str(old);
                     journal.push_str(&new);
                     fs::write(jig.join(".move"), journal).unwrap();
-                    fs::rename(jig.join("open/B-000001.md"), jig.join("closed/B-000001.md"))
-                        .unwrap();
+                    fs::rename(jig.join("open/1aaaaa.md"), jig.join("closed/1aaaaa.md")).unwrap();
                     drop(guard);
                 }
                 let loaded =
-                    find(&jig, "B-000001")?.ok_or_else(|| "issue vanished mid-move".to_string())?;
+                    find(&jig, "1aaaaa")?.ok_or_else(|| "issue vanished mid-move".to_string())?;
                 if Place::of(loaded.issue.status) != loaded.place {
                     return Err(format!(
                         "mismatched in-between state: status {} in {}/",
@@ -722,8 +744,8 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(observed.unwrap(), crate::issue::Status::Closed);
         assert!(!jig.join(".move").exists(), "recovery removed the journal");
-        assert!(jig.join("closed/B-000001.md").is_file());
-        assert!(!jig.join("open/B-000001.md").exists());
+        assert!(jig.join("closed/1aaaaa.md").is_file());
+        assert!(!jig.join("open/1aaaaa.md").exists());
         let _ = fs::remove_dir_all(&root);
     }
 }

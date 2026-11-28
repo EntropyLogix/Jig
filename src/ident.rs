@@ -87,10 +87,10 @@ pub fn new_issue_id(salt: &[u8; 16], taken: impl Fn(&str) -> bool) -> Result<Str
         let mut h = DefaultHasher::new();
         h.write(salt);
         h.write(&rand);
-        let id = format!("B-{:06x}", h.finish() & 0x00ff_ffff);
-        if !taken(&id) {
-            return Ok(id);
+        let key = format!("{:06x}", h.finish() & 0x00ff_ffff);
+        if crate::issue::valid_root_key(&key) && !taken(&key) {
+            return Ok(key);
         }
     }
-    Err("could not allocate a fresh issue id".to_string())
+    Err("could not allocate a fresh issue key".to_string())
 }

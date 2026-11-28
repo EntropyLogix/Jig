@@ -1,11 +1,13 @@
 use crate::check;
 use crate::clock;
+use crate::config;
 use crate::domain::{self, Action};
 use crate::ident;
 use crate::instructions;
 use crate::integration;
 use crate::issue::{self, Issue, Status};
 use crate::memory;
+use crate::names::{Names, Resolved};
 use crate::store::{self, Loaded, Place};
 use crate::text::TextKind;
 use std::cmp::Ordering;
@@ -110,15 +112,26 @@ const STATUS_VALUES: &[&str] = &["proposed", "open", "claimed", "review", "close
 const SORT_VALUES: &[&str] = &["oldest", "newest"];
 const DEP_ACTIONS: &[&str] = &["add", "rm"];
 
-const ARGS_INIT: &[ArgSpec] = &[ArgSpec {
-    name: "no_hooks",
-    kind: ArgType::Boolean,
-    required: false,
-    positional: false,
-    cli: Some("--no-hooks"),
-    alias: None,
-    mcp: true,
-}];
+const ARGS_INIT: &[ArgSpec] = &[
+    ArgSpec {
+        name: "no_hooks",
+        kind: ArgType::Boolean,
+        required: false,
+        positional: false,
+        cli: Some("--no-hooks"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "prefix",
+        kind: ArgType::Text(TextKind::Prefix),
+        required: false,
+        positional: false,
+        cli: Some("--prefix"),
+        alias: None,
+        mcp: true,
+    },
+];
 const ARGS_START: &[ArgSpec] = &[ArgSpec {
     name: "hook_json",
     kind: ArgType::Boolean,
@@ -303,6 +316,15 @@ const ARGS_UPDATE: &[ArgSpec] = &[
         required: false,
         positional: false,
         cli: Some("--release"),
+        alias: None,
+        mcp: true,
+    },
+    ArgSpec {
+        name: "number",
+        kind: ArgType::Text(TextKind::Number),
+        required: false,
+        positional: false,
+        cli: Some("--number"),
         alias: None,
         mcp: true,
     },
@@ -660,15 +682,63 @@ fn with_registry<T>(cwd: &Path, mut read: impl FnMut(&Path) -> R<T>) -> R<T> {
     store::with_read(&jig, store::Recovery::Allow, || read(&jig)).map_err(fail)?
 }
 
-fn resolve_id(raw: &str) -> R<String> {
-    issue::id_alias(raw).ok_or_else(|| usage(format!("invalid issue id {raw:?}")))
+fn names(jig: &Path) -> R<Names> {
+    snapshot_names(jig, &check::scan(jig))
 }
 
-fn load(jig: &Path, raw: &str) -> R<Loaded> {
-    let id = resolve_id(raw)?;
-    store::find(jig, &id)
+fn snapshot_names(jig: &Path, snap: &check::Snapshot) -> R<Names> {
+    let config = config::load(jig).map_err(fail)?;
+    Ok(snap.names(&config.prefix))
+}
+
+fn joined(names: &Names, keys: &[String]) -> String {
+    keys.iter()
+        .map(|key| names.name(key))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn duplicate_warnings(names: &Names) -> Vec<String> {
+    names
+        .duplicates()
+        .map(|(number, roots)| {
+            let paths = roots
+                .iter()
+                .map(|root| root.path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" and ");
+            format!(
+                "number {}{number} is used by {paths}; run `jig check`",
+                names.prefix
+            )
+        })
+        .collect()
+}
+
+fn resolve(names: &Names, raw: &str) -> R<String> {
+    let reference = issue::parse_reference(raw, &names.prefix)
+        .ok_or_else(|| usage(format!("invalid issue reference {raw:?}")))?;
+    match names.resolve(&reference) {
+        Resolved::Key(key) => Ok(key),
+        Resolved::Missing(shown) => Err(fail(format!("issue {shown} not found"))),
+        Resolved::Ambiguous(shown, roots) => {
+            let matches = roots
+                .iter()
+                .map(|root| format!("{} {}", root.path.display(), issue::esc(&root.title)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(fail(format!(
+                "{shown} is ambiguous: {matches}; run `jig check`"
+            )))
+        }
+    }
+}
+
+fn load(jig: &Path, names: &Names, raw: &str) -> R<Loaded> {
+    let key = resolve(names, raw)?;
+    store::find(jig, &key)
         .map_err(fail)?
-        .ok_or_else(|| fail(format!("issue {id} not found")))
+        .ok_or_else(|| fail(format!("issue {} not found", names.name(&key))))
 }
 
 fn read_stdin() -> R<String> {
@@ -742,9 +812,10 @@ fn jopt(v: &Option<String>) -> String {
     }
 }
 
-fn row_json(i: &Issue) -> String {
+fn row_json(names: &Names, i: &Issue) -> String {
     format!(
-        "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"assignee\":{}}}",
+        "{{\"id\":{},\"key\":{},\"title\":{},\"status\":{},\"priority\":{},\"assignee\":{}}}",
+        issue::esc(&names.name(&i.id)),
         issue::esc(&i.id),
         issue::esc(&i.title),
         issue::esc(i.status.as_str()),
@@ -863,7 +934,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "update",
         group: HelpGroup::CreateAndEdit,
-        syntax: "update ID [--title T] [-p N] [--body TEXT|-] [--release NAME]",
+        syntax: "update ID [--title T] [-p N] [--body TEXT|-] [--release NAME] [--number N]",
         description: "change the given fields",
         args: ARGS_UPDATE,
         handler: handle_update,
@@ -1013,7 +1084,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "init",
         group: HelpGroup::Setup,
-        syntax: "init [--no-hooks]",
+        syntax: "init [--no-hooks] [--prefix P]",
         description: "create .jig/, AGENTS.md and project hooks",
         args: ARGS_INIT,
         handler: handle_init,
@@ -1278,7 +1349,7 @@ fn cmd_mcp(args: &[String], _: &Path, _: bool, _: bool) -> R<CommandOutput> {
 fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_command_tail(args, "init")?;
     pos_n(&p, 0, "no positional arguments")?;
-    let created = store::init(cwd).map_err(fail)?;
+    let created = store::init(cwd, opt(&p, "prefix")).map_err(fail)?;
     let _lock = registry(cwd)?;
     let notice = integration::install(cwd, !flag(&p, "no_hooks")).map_err(fail)?;
     let mut out = if created {
@@ -1328,28 +1399,31 @@ fn cmd_add(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
     let body = body_arg(&p, allow_stdin)?.unwrap_or_default();
     let lock = registry(cwd)?;
     let jig = lock.jig.clone();
+    let names = names(&jig)?;
     let parent = match opt(&p, "parent") {
-        Some(raw) => Some(load(&jig, raw)?.issue.id),
+        Some(raw) => Some(load(&jig, &names, raw)?.issue.id),
         None => None,
     };
     let mut depends_on = Vec::new();
     for raw in p.opts.get("dep").into_iter().flatten() {
-        let id = load(&jig, raw)?.issue.id;
+        let id = load(&jig, &names, raw)?.issue.id;
         if depends_on.contains(&id) {
-            return Err(usage(format!("duplicate dependency {id}")));
+            return Err(usage(format!("duplicate dependency {}", names.name(&id))));
         }
         depends_on.push(id);
     }
-    let id = match &parent {
-        Some(p) => next_child(&jig, p)?,
+    let (id, number) = match &parent {
+        Some(p) => (next_child(&jig, p)?, None),
         None => {
             let salt = ident::install_salt(&state_dir()?).map_err(fail)?;
-            ident::new_issue_id(&salt, |id| store::exists(&jig, id)).map_err(fail)?
+            let key = ident::new_issue_id(&salt, |id| store::exists(&jig, id)).map_err(fail)?;
+            (key, Some(names.next_number()))
         }
     };
     let now = clock::now_iso();
     let new = Issue {
         id: id.clone(),
+        number,
         title: title.clone(),
         status: if flag(&p, "approved") {
             Status::Open
@@ -1372,7 +1446,9 @@ fn cmd_add(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
         closing_summary: None,
     };
     store::write_new(&jig, &new).map_err(fail)?;
-    Ok(format!("{id}\n"))
+    let mut names = names;
+    names.add(&new, PathBuf::new());
+    Ok(format!("{}\n", names.name(&id)))
 }
 
 fn next_child(jig: &Path, parent: &str) -> R<String> {
@@ -1458,8 +1534,10 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
         let snap = check::scan(jig);
+        let names = snapshot_names(jig, &snap)?;
         let today = clock::today();
         let mut warnings = file_warnings(&snap, |p| p.starts_with(".jig/open"), true);
+        warnings.extend(duplicate_warnings(&names));
         let mut rows = Vec::new();
         for i in snap.issues() {
             if !domain::field_problems(i).is_empty() {
@@ -1478,23 +1556,28 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                 let unresolved: Vec<String> = eligibility
                     .unresolved
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|reference| reference.text(&names))
                     .collect();
                 warnings.push(format!(
                     "skipping {}: unresolved {}; run `jig check`",
-                    i.id,
+                    names.name(&i.id),
                     unresolved.join(", ")
                 ));
             }
         }
         sort_rows(&mut rows);
         let stdout = if json {
-            let items: Vec<String> = rows.iter().map(row_json).collect();
+            let items: Vec<String> = rows.iter().map(|i| row_json(&names, i)).collect();
             format!("[{}]\n", items.join(","))
         } else {
             let mut out = String::new();
             for i in &rows {
-                out.push_str(&format!("{} {} {}\n", i.id, i.priority, i.title));
+                out.push_str(&format!(
+                    "{} {} {}\n",
+                    names.name(&i.id),
+                    i.priority,
+                    i.title
+                ));
             }
             out
         };
@@ -1678,15 +1761,61 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
     Ok((paths, warnings))
 }
 
+fn named_text(names: &Names, issue: &Issue, text: &str) -> String {
+    let text = text.trim_end_matches('\n');
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return text.to_string();
+    };
+    let Some(end) = rest.find("\n---\n") else {
+        return text.to_string();
+    };
+    let mut out = String::from("---\n");
+    for line in rest[..end].split('\n') {
+        let key = line.split_once(':').map(|(key, _)| key.trim());
+        match key {
+            Some("number") => continue,
+            Some("id") => out.push_str(&format!("id: {}", names.name(&issue.id))),
+            Some("parent") => match &issue.parent {
+                Some(parent) => out.push_str(&format!("parent: {}", names.name(parent))),
+                None => out.push_str("parent: null"),
+            },
+            Some("depends_on") => out.push_str(&format!(
+                "depends_on: [{}]",
+                issue
+                    .depends_on
+                    .iter()
+                    .map(|key| names.name(key))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out.push_str(&rest[end + 1..]);
+    out
+}
+
 fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_command_tail(args, "show")?;
     pos_n(&p, 1, "show ID")?;
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
-        let l = load(jig, &p.pos[0])?;
         let snap = check::scan(jig);
-        snap.resolve(&l.issue.id).map_err(|e| fail(e.to_string()))?;
+        let names = snapshot_names(jig, &snap)?;
+        let l = load(jig, &names, &p.pos[0])?;
+        snap.resolve(&l.issue.id)
+            .map_err(|e| fail(e.text(&names)))?;
         let i = &l.issue;
+        let named = |keys: &[String]| {
+            format!(
+                "[{}]",
+                keys.iter()
+                    .map(|key| issue::esc(&names.name(key)))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
         let (docs, doc_warnings) = issue_docs(jig, &i.id)?;
         let docs_dir = format!(".jig/docs/{}/", i.id);
         let mut readiness = domain::eligibility(
@@ -1702,61 +1831,39 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
             ));
         }
         if json {
-            let deps = format!(
-                "[{}]",
-                i.depends_on
-                    .iter()
-                    .map(|d| issue::esc(d))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
+            let deps = named(&i.depends_on);
             let unresolved = format!(
                 "[{}]",
                 readiness
                     .unresolved
                     .iter()
-                    .map(|s| issue::esc(&s.to_string()))
+                    .map(|s| issue::esc(&s.text(&names)))
                     .collect::<Vec<_>>()
                     .join(",")
             );
-            let blockers = format!(
-                "[{}]",
-                readiness
-                    .blockers
-                    .iter()
-                    .map(|s| issue::esc(s))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            let subtasks = format!(
-                "[{}]",
-                readiness
-                    .subtasks
-                    .iter()
-                    .map(|s| issue::esc(s))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
+            let blockers = named(&readiness.blockers);
+            let subtasks = named(&readiness.subtasks);
             let readiness_json = format!(
                 "{{\"ready\":{},\"deferred_until\":{},\"deferred_by\":{},\"unresolved\":{},\"blockers\":{},\"subtasks\":{}}}",
                 readiness.ready(),
                 jopt(&readiness.deferred_until),
-                jopt(&readiness.deferred_by),
+                jopt(&readiness.deferred_by.as_ref().map(|key| names.name(key))),
                 unresolved,
                 blockers,
                 subtasks
             );
             Ok(CommandOutput {
                 stdout: format!(
-                    "{{\"id\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
+                    "{{\"id\":{},\"key\":{},\"title\":{},\"status\":{},\"priority\":{},\"parent\":{},\
                  \"depends_on\":{},\"assignee\":{},\"defer_until\":{},\"created_at\":{},\
                  \"updated_at\":{},\"closed_at\":{},\"release\":{},\"body\":{},\"history\":{},\"notes\":{},\
                  \"closing_summary\":{},\"readiness\":{},\"docs_dir\":{},\"docs\":[{}]}}\n",
+                    issue::esc(&names.name(&i.id)),
                     issue::esc(&i.id),
                     issue::esc(&i.title),
                     issue::esc(i.status.as_str()),
                     i.priority,
-                    jopt(&i.parent),
+                    jopt(&i.parent.as_ref().map(|key| names.name(key))),
                     deps,
                     jopt(&i.assignee),
                     jopt(&i.defer_until),
@@ -1779,13 +1886,13 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                 code: 0,
             })
         } else {
-            let mut output = l.text.trim_end_matches('\n').to_string();
+            let mut output = named_text(&names, i, &l.text);
             output.push_str("\n\nReady: ");
             if readiness.ready() {
                 output.push_str("yes\n");
             } else {
                 output.push_str("no — ");
-                output.push_str(&readiness.reason_text(true));
+                output.push_str(&readiness.reason_text(&names, true));
                 output.push('\n');
             }
             output.push_str("Documents: ");
@@ -1845,6 +1952,7 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     };
     with_registry(cwd, |jig| {
         let snap = check::scan(jig);
+        let names = snapshot_names(jig, &snap)?;
         let want = |s: Status| {
             filter == "all"
                 || (filter == "active" && s.active())
@@ -1866,7 +1974,7 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         }
         let grouped = !json && order.is_none() && release.is_none() && opt(&p, "status").is_none();
         let stdout = if json {
-            let items: Vec<String> = rows.iter().map(row_json).collect();
+            let items: Vec<String> = rows.iter().map(|i| row_json(&names, i)).collect();
             format!("[{}]\n", items.join(","))
         } else if grouped {
             let groups = [
@@ -1886,7 +1994,7 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                     let who = i.assignee.as_deref().unwrap_or("-");
                     out.push_str(&format!(
                         "  {} {} {} {who} {}\n",
-                        i.id,
+                        names.name(&i.id),
                         i.status.as_str(),
                         i.priority,
                         i.title
@@ -1904,16 +2012,18 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                     .unwrap_or_default();
                 out.push_str(&format!(
                     "{} {} {pri} {who}{created} {}\n",
-                    i.id,
+                    names.name(&i.id),
                     i.status.as_str(),
                     i.title
                 ));
             }
             out
         };
+        let mut warnings = file_warnings(&snap, |_| true, false);
+        warnings.extend(duplicate_warnings(&names));
         Ok(CommandOutput {
             stdout,
-            warnings: file_warnings(&snap, |_| true, false),
+            warnings,
             code: 0,
         })
     })
@@ -1935,8 +2045,9 @@ fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let json = json || flag(&p, "json");
     with_registry(cwd, |jig| {
         let snap = check::scan(jig);
-        let id = resolve_id(&p.pos[0])?;
-        let root = snap.resolve(&id).map_err(|e| fail(e.to_string()))?;
+        let names = snapshot_names(jig, &snap)?;
+        let id = resolve(&names, &p.pos[0])?;
+        let root = snap.resolve(&id).map_err(|e| fail(e.text(&names)))?;
         let available: HashSet<&str> = snap.issues().map(|i| i.id.as_str()).collect();
         let mut kids: HashMap<String, Vec<Issue>> = HashMap::new();
         for i in snap.issues() {
@@ -1955,23 +2066,31 @@ fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
             v.sort_by_key(child_key);
         }
         let stdout = if json {
-            format!("{}\n", tree_json(&root, &kids, &mut HashSet::new()))
+            format!("{}\n", tree_json(&names, &root, &kids, &mut HashSet::new()))
         } else {
             let mut out = String::new();
-            tree_text(&mut out, &root, &kids, 0, &mut HashSet::new());
+            tree_text(&names, &mut out, &root, &kids, 0, &mut HashSet::new());
             out
         };
+        let mut warnings = file_warnings(&snap, |_| true, false);
+        warnings.extend(duplicate_warnings(&names));
         Ok(CommandOutput {
             stdout,
-            warnings: file_warnings(&snap, |_| true, false),
+            warnings,
             code: 0,
         })
     })
 }
 
-fn tree_json(i: &Issue, kids: &HashMap<String, Vec<Issue>>, seen: &mut HashSet<String>) -> String {
+fn tree_json(
+    names: &Names,
+    i: &Issue,
+    kids: &HashMap<String, Vec<Issue>>,
+    seen: &mut HashSet<String>,
+) -> String {
     let mut out = format!(
-        "{{\"id\":{},\"title\":{},\"status\":{},\"children\":[",
+        "{{\"id\":{},\"key\":{},\"title\":{},\"status\":{},\"children\":[",
+        issue::esc(&names.name(&i.id)),
         issue::esc(&i.id),
         issue::esc(&i.title),
         issue::esc(i.status.as_str())
@@ -1979,7 +2098,10 @@ fn tree_json(i: &Issue, kids: &HashMap<String, Vec<Issue>>, seen: &mut HashSet<S
     if seen.insert(i.id.clone())
         && let Some(list) = kids.get(&i.id)
     {
-        let parts: Vec<String> = list.iter().map(|c| tree_json(c, kids, seen)).collect();
+        let parts: Vec<String> = list
+            .iter()
+            .map(|c| tree_json(names, c, kids, seen))
+            .collect();
         out.push_str(&parts.join(","));
     }
     out.push_str("]}");
@@ -1987,6 +2109,7 @@ fn tree_json(i: &Issue, kids: &HashMap<String, Vec<Issue>>, seen: &mut HashSet<S
 }
 
 fn tree_text(
+    names: &Names,
     out: &mut String,
     i: &Issue,
     kids: &HashMap<String, Vec<Issue>>,
@@ -1994,13 +2117,18 @@ fn tree_text(
     seen: &mut HashSet<String>,
 ) {
     out.push_str(&"  ".repeat(depth));
-    out.push_str(&format!("{} {} {}\n", i.id, i.status.as_str(), i.title));
+    out.push_str(&format!(
+        "{} {} {}\n",
+        names.name(&i.id),
+        i.status.as_str(),
+        i.title
+    ));
     if !seen.insert(i.id.clone()) {
         return;
     }
     if let Some(list) = kids.get(&i.id) {
         for c in list {
-            tree_text(out, c, kids, depth + 1, seen);
+            tree_text(names, out, c, kids, depth + 1, seen);
         }
     }
 }
@@ -2011,13 +2139,17 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
     let force = flag(&p, "force");
     let lock = registry(cwd)?;
     let jig = &lock.jig;
-    let l = load(jig, &p.pos[0])?;
+    let names = names(jig)?;
+    let l = load(jig, &names, &p.pos[0])?;
     let snap = check::scan(jig);
     if let Err(e) = snap.resolve(&l.issue.id) {
-        return Err(fail(e.to_string()));
+        return Err(fail(e.text(&names)));
     }
     if let Some((problem, _)) = domain::field_problems(&l.issue).first() {
-        return Err(fail(format!("issue {}: {problem}", l.issue.id)));
+        return Err(fail(format!(
+            "issue {}: {problem}",
+            names.name(&l.issue.id)
+        )));
     }
     let today = clock::today();
     let eligibility = domain::eligibility(
@@ -2042,15 +2174,15 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
         };
         return Err(fail(format!(
             "issue {}{} is not ready: {}",
-            l.issue.id,
+            names.name(&l.issue.id),
             prefix,
-            eligibility.reason_text(true)
+            eligibility.reason_text(&names, true)
         )));
     }
     let bypassed = eligibility.bypassed();
     let by = opt(&p, "by").map(|s| s.to_string());
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Claim).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Claim).map_err(fail)?;
     i.assignee = by.clone();
     i.claim_id = Some(ident::new_claim_id().map_err(fail)?);
     i.updated_at = Some(clock::now_iso());
@@ -2061,10 +2193,16 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
             .unwrap_or_default();
         let mut parts = Vec::new();
         if !eligibility.blockers.is_empty() {
-            parts.push(format!("blockers {}", eligibility.blockers.join(", ")));
+            parts.push(format!(
+                "blockers {}",
+                joined(&names, &eligibility.blockers)
+            ));
         }
         if !eligibility.subtasks.is_empty() {
-            parts.push(format!("subtasks {}", eligibility.subtasks.join(", ")));
+            parts.push(format!(
+                "subtasks {}",
+                joined(&names, &eligibility.subtasks)
+            ));
         }
         hist_push(
             &mut i,
@@ -2076,20 +2214,21 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
     }
     store::write_issue(&l, &i).map_err(fail)?;
     let who = by.map(|b| format!(" as {b}")).unwrap_or_default();
-    Ok(format!("claimed {}{who}\n", i.id))
+    Ok(format!("claimed {}{who}\n", names.name(&i.id)))
 }
 
 fn cmd_approve(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_command_tail(args, "approve")?;
     pos_n(&p, 1, "approve ID")?;
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Approve).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Approve).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
     hist_push(&mut i, hist_entry("approved"));
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("approved {}\n", i.id))
+    Ok(format!("approved {}\n", names.name(&i.id)))
 }
 
 fn cmd_revise(args: &[String], cwd: &Path) -> R<String> {
@@ -2097,27 +2236,29 @@ fn cmd_revise(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "revise ID")?;
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Revise).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Revise).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
     hist_push(&mut i, hist_entry(&history_text("revised:", reason)));
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("returned {} to proposed\n", i.id))
+    Ok(format!("returned {} to proposed\n", names.name(&i.id)))
 }
 
 fn cmd_unclaim(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_command_tail(args, "unclaim")?;
     pos_n(&p, 1, "unclaim ID")?;
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Unclaim).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Unclaim).map_err(fail)?;
     i.assignee = None;
     i.claim_id = None;
     i.updated_at = Some(clock::now_iso());
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("unclaimed {}\n", i.id))
+    Ok(format!("unclaimed {}\n", names.name(&i.id)))
 }
 
 fn cmd_update(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
@@ -2127,14 +2268,19 @@ fn cmd_update(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
         && opt(&p, "priority").is_none()
         && opt(&p, "body").is_none()
         && opt(&p, "release").is_none()
+        && opt(&p, "number").is_none()
     {
         return Err(usage("update requires at least one change"));
     }
     let body = body_arg(&p, allow_stdin)?;
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     if opt(&p, "release").is_some() && l.issue.status != Status::Closed {
-        return Err(fail(format!("issue {} is not closed", l.issue.id)));
+        return Err(fail(format!(
+            "issue {} is not closed",
+            names.name(&l.issue.id)
+        )));
     }
     let mut i = l.issue.clone();
     if let Some(t) = opt(&p, "title") {
@@ -2146,6 +2292,37 @@ fn cmd_update(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
     if let Some(b) = body {
         i.body = b;
     }
+    let mut names = names;
+    if let Some(raw) = opt(&p, "number") {
+        let number: u64 = raw
+            .parse()
+            .map_err(|_| usage(format!("invalid issue number {raw:?}")))?;
+        if i.number.is_none() {
+            return Err(fail(format!(
+                "{} is a subtask; its number comes from its root",
+                names.name(&i.id)
+            )));
+        }
+        if i.number != Some(number) {
+            if names.taken(number) {
+                return Err(fail(format!(
+                    "number {}{number} is already used",
+                    names.prefix
+                )));
+            }
+            let old = names.name(&i.id);
+            i.number = Some(number);
+            names.add(&i, l.path.clone());
+            let new = names.name(&i.id);
+            hist_push(&mut i, hist_entry(&format!("number: {old} -> {new}")));
+        } else if opt(&p, "title").is_none()
+            && opt(&p, "priority").is_none()
+            && opt(&p, "body").is_none()
+            && opt(&p, "release").is_none()
+        {
+            return Ok(format!("updated {}\n", names.name(&i.id)));
+        }
+    }
     if let Some(release) = opt(&p, "release") {
         if i.release.as_deref() != Some(release) {
             let old = i.release.as_deref().unwrap_or("null").to_string();
@@ -2154,13 +2331,14 @@ fn cmd_update(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
         } else if opt(&p, "title").is_none()
             && opt(&p, "priority").is_none()
             && opt(&p, "body").is_none()
+            && i.number == l.issue.number
         {
-            return Ok(format!("updated {}\n", i.id));
+            return Ok(format!("updated {}\n", names.name(&i.id)));
         }
     }
     i.updated_at = Some(clock::now_iso());
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("updated {}\n", i.id))
+    Ok(format!("updated {}\n", names.name(&i.id)))
 }
 
 fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
@@ -2168,9 +2346,10 @@ fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "review ID")?;
     let summary = opt(&p, "summary");
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Review).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Review).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
     let who = i
         .assignee
@@ -2184,7 +2363,7 @@ fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
     }
     hist_push(&mut i, entry);
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("submitted {} for review\n", i.id))
+    Ok(format!("submitted {} for review\n", names.name(&i.id)))
 }
 
 fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
@@ -2192,9 +2371,10 @@ fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "rework ID")?;
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Rework).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Rework).map_err(fail)?;
     if i.claim_id.is_none() {
         i.claim_id = Some(ident::new_claim_id().map_err(fail)?);
     }
@@ -2204,7 +2384,7 @@ fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
         hist_entry(&history_text("rework requested:", reason)),
     );
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("returned {} for rework\n", i.id))
+    Ok(format!("returned {} for rework\n", names.name(&i.id)))
 }
 
 fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
@@ -2214,10 +2394,11 @@ fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
     let summary = opt(&p, "summary");
     let lock = registry(cwd)?;
     let jig = &lock.jig;
-    let l = load(jig, &p.pos[0])?;
+    let names = names(jig)?;
+    let l = load(jig, &names, &p.pos[0])?;
     let now = clock::now_iso();
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Close).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Close).map_err(fail)?;
     i.closed_at = Some(now.clone());
     i.updated_at = Some(now);
     i.claim_id = None;
@@ -2226,7 +2407,7 @@ fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
     }
     hist_push(&mut i, hist_entry(&history_text("closed:", reason)));
     store::move_issue(jig, &l, &i).map_err(fail)?;
-    Ok(format!("closed {}\n", i.id))
+    Ok(format!("closed {}\n", names.name(&i.id)))
 }
 
 fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
@@ -2235,9 +2416,10 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
     let jig = &lock.jig;
-    let l = load(jig, &p.pos[0])?;
+    let names = names(jig)?;
+    let l = load(jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
-    i.status = domain::transition(&i, Action::Reopen).map_err(fail)?;
+    i.status = domain::transition(&i, &names.name(&i.id), Action::Reopen).map_err(fail)?;
     let mut entry = hist_entry(&history_text("reopened:", reason));
     if let Some(summary) = i.closing_summary.take() {
         entry.push_str("\n  ");
@@ -2253,7 +2435,7 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
     i.updated_at = Some(clock::now_iso());
     hist_push(&mut i, entry);
     store::move_issue(jig, &l, &i).map_err(fail)?;
-    Ok(format!("reopened {}\n", i.id))
+    Ok(format!("reopened {}\n", names.name(&i.id)))
 }
 
 fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
@@ -2263,6 +2445,7 @@ fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
     let lock = registry(cwd)?;
     let jig = &lock.jig;
     let snap = check::scan(jig);
+    let names = snapshot_names(jig, &snap)?;
     let warnings = file_warnings(
         &snap,
         |path| {
@@ -2291,12 +2474,12 @@ fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
     for rec in candidates {
         let loaded = store::find(jig, &rec.issue.id)
             .map_err(fail)?
-            .ok_or_else(|| fail(format!("issue {} not found", rec.issue.id)))?;
+            .ok_or_else(|| fail(format!("issue {} not found", names.name(&rec.issue.id))))?;
         let mut issue = loaded.issue.clone();
         issue.release = Some(name.clone());
         issue.updated_at = Some(now.clone());
         store::write_issue(&loaded, &issue).map_err(fail)?;
-        ids.push(issue.id);
+        ids.push(names.name(&issue.id));
     }
     if ids.is_empty() {
         return Ok(CommandOutput {
@@ -2342,40 +2525,43 @@ fn cmd_dep(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 3, "dep add|rm ID BLOCKER")?;
     let lock = registry(cwd)?;
     let jig = &lock.jig;
-    let id = resolve_id(&p.pos[1])?;
-    let blocker = resolve_id(&p.pos[2])?;
+    let names = names(jig)?;
+    let id = resolve(&names, &p.pos[1])?;
+    let blocker = resolve(&names, &p.pos[2])?;
     if id == blocker {
         return Err(fail("issue cannot depend on itself"));
     }
     let l = store::find(jig, &id)
         .map_err(fail)?
-        .ok_or_else(|| fail(format!("issue {id} not found")))?;
+        .ok_or_else(|| fail(format!("issue {} not found", names.name(&id))))?;
+    let shown = names.name(&id);
+    let shown_blocker = names.name(&blocker);
     let mut i = l.issue.clone();
     match p.pos[0].as_str() {
         "add" => {
             store::find(jig, &blocker)
                 .map_err(fail)?
-                .ok_or_else(|| fail(format!("issue {blocker} not found")))?;
+                .ok_or_else(|| fail(format!("issue {shown_blocker} not found")))?;
             if i.depends_on.contains(&blocker) {
-                return Err(fail(format!("{id} already depends on {blocker}")));
+                return Err(fail(format!("{shown} already depends on {shown_blocker}")));
             }
             let g = dep_graph(jig)?;
             if reaches(&g, &blocker, &id) {
-                return Err(fail(format!("dependency cycle via {blocker}")));
+                return Err(fail(format!("dependency cycle via {shown_blocker}")));
             }
             i.depends_on.push(blocker.clone());
             i.updated_at = Some(clock::now_iso());
             store::write_issue(&l, &i).map_err(fail)?;
-            Ok(format!("{id} now blocked by {blocker}\n"))
+            Ok(format!("{shown} now blocked by {shown_blocker}\n"))
         }
         "rm" => {
             if !i.depends_on.contains(&blocker) {
-                return Err(fail(format!("{id} does not depend on {blocker}")));
+                return Err(fail(format!("{shown} does not depend on {shown_blocker}")));
             }
             i.depends_on.retain(|d| d != &blocker);
             i.updated_at = Some(clock::now_iso());
             store::write_issue(&l, &i).map_err(fail)?;
-            Ok(format!("{id} no longer blocked by {blocker}\n"))
+            Ok(format!("{shown} no longer blocked by {shown_blocker}\n"))
         }
         other => Err(usage(format!("unknown dep action {other}; use add or rm"))),
     }
@@ -2386,7 +2572,8 @@ fn cmd_note(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 2, "note ID TEXT")?;
     let text = &p.pos[1];
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     let who = opt(&p, "by").map(|b| format!("{b}: ")).unwrap_or_default();
     if !i.notes.is_empty() {
@@ -2396,7 +2583,7 @@ fn cmd_note(args: &[String], cwd: &Path) -> R<String> {
         .push_str(&format!("- {} {who}{text}", clock::now_stamp()));
     i.updated_at = Some(clock::now_iso());
     store::write_issue(&l, &i).map_err(fail)?;
-    Ok(format!("noted {}\n", i.id))
+    Ok(format!("noted {}\n", names.name(&i.id)))
 }
 
 fn cmd_defer(args: &[String], cwd: &Path) -> R<String> {
@@ -2408,17 +2595,18 @@ fn cmd_defer(args: &[String], cwd: &Path) -> R<String> {
         return Err(usage("defer requires exactly one of --until or --clear"));
     }
     let lock = registry(cwd)?;
-    let l = load(&lock.jig, &p.pos[0])?;
+    let names = names(&lock.jig)?;
+    let l = load(&lock.jig, &names, &p.pos[0])?;
     if l.place == Place::Closed && until.is_some() {
-        return Err(fail(format!("issue {} is closed", l.issue.id)));
+        return Err(fail(format!("issue {} is closed", names.name(&l.issue.id))));
     }
     let mut i = l.issue.clone();
     i.defer_until = until.map(|d| d.to_string());
     i.updated_at = Some(clock::now_iso());
     store::write_issue(&l, &i).map_err(fail)?;
     match until {
-        Some(d) => Ok(format!("deferred {} until {d}\n", i.id)),
-        None => Ok(format!("cleared deferral on {}\n", i.id)),
+        Some(d) => Ok(format!("deferred {} until {d}\n", names.name(&i.id))),
+        None => Ok(format!("cleared deferral on {}\n", names.name(&i.id))),
     }
 }
 
@@ -2492,7 +2680,8 @@ mod tests {
 
     fn issue(status: Status) -> Issue {
         Issue {
-            id: "B-abcdef".into(),
+            id: "1abcde".into(),
+            number: Some(1),
             title: "t".into(),
             status,
             priority: 2,
