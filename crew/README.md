@@ -1,4 +1,4 @@
-# billet-crew
+# blt-crew
 
 An optional review loop for coding agents on top of Billet. An architect turns
 a proposal into a contract, a developer implements it, one or more auditors
@@ -10,15 +10,15 @@ uses statuses, the history, notes, and the issue's documents directory.
 
 | Step | The person runs | Result |
 | --- | --- | --- |
-| 0 | optional: `/billet-crew architect ID` on a proposal, then `blt approve ID` | the contract, `architecture.md`, subtasks |
-| 1 | `/billet-crew dev ID claude-dev` | the issue is claimed, implemented, handed over with `blt review` |
-| 2 | `/billet-crew audit ID codex-1` (any number, in parallel) | `audit-codex-1.md` |
-| 3 | `/billet-crew audit ID --lead` (interactive) | `audit-lead.md`, `decision.md` |
-| 3a | optional: `/billet-crew audit ID claude-2 --cross-check` | a report on the lead's decision |
+| 0 | optional: `/blt-crew architect ID` on a proposal, then `blt approve ID` | the contract, `architecture.md`, subtasks |
+| 1 | `/blt-crew dev ID claude-dev` | the issue is claimed, implemented, handed over with `blt review` |
+| 2 | `/blt-crew audit ID codex-1` (any number, in parallel) | `audit-codex-1.md` |
+| 3 | `/blt-crew audit ID --lead` (interactive) | `audit-lead.md`, `decision.md` |
+| 3a | optional: `/blt-crew audit ID claude-2 --cross-check` | a report on the lead's decision |
 | 4 | the lead runs `blt rework ID` | back to step 1; the developer reads only `decision.md` |
 | 5 | the person runs `blt close ID --reason ...` | done |
 
-In Codex, start a role with `$billet-crew dev ID claude-dev` and so on.
+In Codex, start a role with `$blt-crew dev ID claude-dev` and so on.
 
 The architect works only on `proposed` issues and writes no code: it
 rewrites the description as the contract, keeps the analysis in
@@ -55,8 +55,8 @@ crew/install.sh --codex      # only Codex
 crew/install.sh --uninstall  # remove (combine with --claude or --codex)
 ```
 
-The skill is copied to `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/billet-crew`
-and `~/.agents/skills/billet-crew`; rerun the installer after updating the
+The skill is copied to `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/blt-crew`
+and `~/.agents/skills/blt-crew`; rerun the installer after updating the
 checkout. It touches no settings or hooks. The skill runs only when invoked
 explicitly (`disable-model-invocation` for Claude Code,
 `agents/openai.yaml` for Codex).

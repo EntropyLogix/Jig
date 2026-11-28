@@ -1,4 +1,4 @@
-# billet-crew: rules for every role
+# blt-crew: rules for every role
 
 Reply in the language of the issue description of {{ID}}, every message to
 the person included, the final one too. Change language only when the

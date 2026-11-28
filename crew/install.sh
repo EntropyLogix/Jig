@@ -2,12 +2,12 @@
 set -eu
 
 SRC=$(cd "$(dirname "$0")" && pwd)
-CLAUDE_SKILL="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/billet-crew"
-CODEX_SKILL="$HOME/.agents/skills/billet-crew"
+CLAUDE_SKILL="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/blt-crew"
+CODEX_SKILL="$HOME/.agents/skills/blt-crew"
 
 usage() {
     echo "usage: $0 [--claude | --codex] [--uninstall]"
-    echo "Installs the billet-crew skill for Claude Code and Codex (both by default)."
+    echo "Installs the blt-crew skill for Claude Code and Codex (both by default)."
     exit 1
 }
 
@@ -31,7 +31,7 @@ remove_skill() {
             exit 1
         fi
         if [ ! -f "$1/bin/crew" ]; then
-            echo "refusing to remove $1: it is not a billet-crew skill"
+            echo "refusing to remove $1: it is not a blt-crew skill"
             exit 1
         fi
         rm -rf "$1"
@@ -50,10 +50,10 @@ install_skill() {
     done
     install -m 0644 "$SRC/agents/openai.yaml" "$1/agents/openai.yaml"
     install -m 0644 "$SRC/README.md" "$1/README.md"
-    sed -e "s|~/.claude/skills/billet-crew|$(escape "$(display "$CLAUDE_SKILL")")|g" \
-        -e "s|~/.agents/skills/billet-crew|$(escape "$(display "$CODEX_SKILL")")|g" \
+    sed -e "s|~/.claude/skills/blt-crew|$(escape "$(display "$CLAUDE_SKILL")")|g" \
+        -e "s|~/.agents/skills/blt-crew|$(escape "$(display "$CODEX_SKILL")")|g" \
         "$SRC/SKILL.md" >"$1/SKILL.md"
-    echo "installed billet-crew for $2: $1"
+    echo "installed blt-crew for $2: $1"
 }
 
 claude=yes
@@ -70,8 +70,8 @@ done
 [ "$claude" = no ] && [ "$codex" = no ] && usage
 
 if [ "$mode" = uninstall ]; then
-    [ "$claude" = yes ] && remove_skill "$CLAUDE_SKILL" && echo "removed billet-crew for Claude Code: $CLAUDE_SKILL"
-    [ "$codex" = yes ] && remove_skill "$CODEX_SKILL" && echo "removed billet-crew for Codex: $CODEX_SKILL"
+    [ "$claude" = yes ] && remove_skill "$CLAUDE_SKILL" && echo "removed blt-crew for Claude Code: $CLAUDE_SKILL"
+    [ "$codex" = yes ] && remove_skill "$CODEX_SKILL" && echo "removed blt-crew for Codex: $CODEX_SKILL"
     exit 0
 fi
 
@@ -80,7 +80,7 @@ for tool in blt jq git; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
 if [ -n "$missing" ]; then
-    echo "billet-crew needs on PATH:$missing"
+    echo "blt-crew needs on PATH:$missing"
     for tool in $missing; do
         case $tool in
             blt) echo "  blt: cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.0" ;;
@@ -93,4 +93,4 @@ fi
 
 [ "$claude" = yes ] && install_skill "$CLAUDE_SKILL" "Claude Code"
 [ "$codex" = yes ] && install_skill "$CODEX_SKILL" "Codex"
-echo "start a role in a new session: /billet-crew ... (Claude Code) or \$billet-crew ... (Codex)"
+echo "start a role in a new session: /blt-crew ... (Claude Code) or \$blt-crew ... (Codex)"

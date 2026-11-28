@@ -364,7 +364,7 @@ The hook payload is the static `blt start` workflow text wrapped as
 It reads no issue or memory contents, takes no lock, and runs no other
 executables.
 
-## Optional: billet-crew
+## Optional: blt-crew
 
 [`crew/`](crew/) is an optional skill for Claude Code and Codex that runs a
 review loop on top of Billet:

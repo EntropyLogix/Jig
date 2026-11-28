@@ -5339,7 +5339,7 @@ fn crew_review_loop() {
                 "{role} output and the {name} instructions:\n{out}"
             );
         }
-        assert!(out.contains("# billet-crew: rules for every role"));
+        assert!(out.contains("# blt-crew: rules for every role"));
         assert_eq!(
             out.contains("# Auditing rules"),
             ["auditor", "cross-check", "lead"].contains(&role)
@@ -5482,14 +5482,14 @@ fn crew_install_and_uninstall() {
         }
         command.output().unwrap()
     };
-    let claude = home.join(".claude/skills/billet-crew");
-    let codex = home.join(".agents/skills/billet-crew");
+    let claude = home.join(".claude/skills/blt-crew");
+    let codex = home.join(".agents/skills/blt-crew");
 
     fs::create_dir_all(&codex).unwrap();
     fs::write(codex.join("notes.md"), "mine\n").unwrap();
     let refused = install(&[], None);
     assert_eq!(refused.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&refused.stdout).contains("not a billet-crew skill"));
+    assert!(String::from_utf8_lossy(&refused.stdout).contains("not a blt-crew skill"));
     assert!(codex.join("notes.md").is_file());
     fs::remove_dir_all(&codex).unwrap();
 
@@ -5539,8 +5539,8 @@ fn crew_install_and_uninstall() {
 
     let o = install(&["--claude"], Some(&custom));
     assert!(o.status.success());
-    let skill = fs::read_to_string(custom.join("skills/billet-crew/SKILL.md")).unwrap();
-    let crew_path = format!("{}/skills/billet-crew/bin/crew", custom.display());
+    let skill = fs::read_to_string(custom.join("skills/blt-crew/SKILL.md")).unwrap();
+    let crew_path = format!("{}/skills/blt-crew/bin/crew", custom.display());
     assert!(
         skill.contains(&format!("allowed-tools: Bash({crew_path}:*)")),
         "{skill}"
