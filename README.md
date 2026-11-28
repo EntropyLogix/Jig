@@ -333,12 +333,17 @@ scope, so it is set only on closed issues.
 `blt init` installs agent integration into the project by default, so running
 it in an already-initialized checkout is the opt-in path:
 
-- `AGENTS.md` gains a `<!-- BEGIN BLT v:N hash:H -->…<!-- END BLT -->`
-  managed block with the workflow rules. Existing file bytes are preserved;
-  an unmodified older-version block is upgraded in place, a block edited by
-  hand (hash mismatch) is left alone with a notice, and malformed or
-  duplicated markers refuse the edit. `blt check` reports a missing or
-  outdated block.
+- `AGENTS.md` gains one fixed line that points agents at `blt start`:
+
+  ```text
+  This project tracks work with `blt` (https://github.com/EntropyLogix/Billet): run `blt start` before you begin and follow its rules; if `blt` is missing, ask a person to install it.
+  ```
+
+  The line never changes between versions, so there are no markers to
+  maintain. `init` appends it when missing and leaves every other byte
+  alone; `blt check` reports a file without it. The workflow rules
+  themselves come from `blt start` through the hook below, so they are not
+  repeated in `AGENTS.md`.
 - `.claude/settings.json` and `.codex/hooks.json` each gain one SessionStart
   hook group running `blt start --hook-json` (no matcher: it fires for every
   session source, including after `/clear` and compaction). Codex 0.133 added the compact

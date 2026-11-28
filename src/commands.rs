@@ -1351,17 +1351,12 @@ fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 0, "no positional arguments")?;
     let created = store::init(cwd, opt(&p, "prefix")).map_err(fail)?;
     let _lock = registry(cwd)?;
-    let notice = integration::install(cwd, !flag(&p, "no_hooks")).map_err(fail)?;
-    let mut out = if created {
+    integration::install(cwd, !flag(&p, "no_hooks")).map_err(fail)?;
+    Ok(if created {
         "initialized .blt/\n".to_string()
     } else {
         ".blt/ already initialized\n".to_string()
-    };
-    if let Some(notice) = notice {
-        out.push_str(&notice);
-        out.push('\n');
-    }
-    Ok(out)
+    })
 }
 
 fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {

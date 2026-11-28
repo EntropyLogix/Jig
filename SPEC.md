@@ -18,8 +18,8 @@ contract and acceptance checks for v1.
   machine-local project config, or redirect to another checkout is needed.
   `blt start` does not need to print the absolute path on each run.
 - `blt init [--no-hooks]` also installs the approved agent integration by
-  default: a marker-delimited `## Issue tracking with Billet` block in
-  the project's `AGENTS.md` (see Agent Instructions Block), and a
+  default: the fixed instructions line in the project's `AGENTS.md` (see
+  Agent Instructions Line), and a
   project-local SessionStart hook running
   `blt start --hook-json` merged into `.claude/settings.json` and
   `.codex/hooks.json`. The merge inserts only the new hook group into the
@@ -280,29 +280,25 @@ contract and acceptance checks for v1.
   No automatic key generation or `--key` is needed. `start` never loads the
   full memory automatically.
 
-### Agent Instructions Block
+### Agent Instructions Line
 
-- The block is delimited by `<!-- BEGIN BLT v:N hash:H -->` and
-  `<!-- END BLT -->`, where `N` is the block format version and `H` is a
-  short hash of the text between the markers as `blt` wrote it.
-- `init` appends the block when no markers exist. When the markers exist
-  and the hash matches the text, the block is unmodified: `init` replaces
-  an older version with the current one and leaves a current one alone.
-  When the hash does not match, a person edited the block: `init` leaves
-  it untouched and reports that it is customized. A block of a newer
-  version than this `blt` supports is left untouched. Malformed or
-  duplicated markers refuse the edit, as before.
-- `check` reports a missing block and an outdated unmodified block (hint:
-  `blt init`). A customized block of the current version is not a problem.
-  A customized block of an older version is reported with the hint to
-  remove the block, run `blt init`, and reapply the local edits. A block of
-  a newer version is reported with the hint to update `blt`.
-- Whenever `init` leaves an existing block untouched in a state that
-  `check` reports, `init` prints the same problem and hint, prefixed with
-  `AGENTS.md:`, and still exits 0. A refusal also names `AGENTS.md`.
-- The block text of a released version `N` never changes. Any change to the
-  text, apart from the substituted `blt` version, comes with `N + 1`.
-- The block text tells agents, in this order:
+- `AGENTS.md` carries one fixed line, with no markers or heading:
+
+  ```text
+  This project tracks work with `blt` (https://github.com/EntropyLogix/Billet): run `blt start` before you begin and follow its rules; if `blt` is missing, ask a person to install it.
+  ```
+
+- The line is present when some line of the file equals it exactly (a
+  trailing `\r` is ignored). `check` reports a missing `AGENTS.md` or a
+  file without the line (hint: `blt init`). `init` appends the line when it
+  is missing, after one blank line, in the file's newline style; it never
+  changes other bytes, and a file that already has the line stays
+  byte-for-byte.
+- The line never changes between versions, so it has no version, hash, or
+  update path. The workflow rules live only in `blt start`, which the
+  SessionStart hook and MCP `initialize` deliver; an agent without either
+  reads the line and runs `blt start` itself.
+- The `blt start` workflow text tells agents, in this order:
   - the project tracks work with `blt` and keeps no task lists in other
     Markdown or TODO files; the agent's built-in todo or plan tool holds
     only the steps of the current task, and anything that must outlive the
@@ -310,7 +306,7 @@ contract and acceptance checks for v1.
   - `blt` comes from `https://github.com/EntropyLogix/Billet`; if it is not
     installed, ask a person to install it with
     `cargo install --locked --git https://github.com/EntropyLogix/Billet --tag vX.Y.Z`,
-    where `X.Y.Z` is the version of `blt` that wrote the block;
+    where `X.Y.Z` is the version of `blt`;
   - run `blt start`; `blt ready` lists approved, unblocked work; `blt show ID`
     reads one issue; an issue authorizes only its described scope; refer to
     issues by the handle `blt` prints, in commands and in messages, and a
@@ -341,7 +337,6 @@ contract and acceptance checks for v1.
     the agent's own memory;
   - if `blt ready` warns or lists nothing, run `blt check` and report to a
     person; never remove dependencies or approve proposals to get unblocked.
-- The `blt start` workflow text states the same rules.
 
 ### Registry Check
 
@@ -376,7 +371,7 @@ contract and acceptance checks for v1.
   binary. The client starts it and ends it with the session; there is no
   daemon, port, or background service. It is optional and meant for
   agents without a shell or for clients where a person approves tool calls;
-  an agent with a shell works through the CLI, the `AGENTS.md` block, and
+  an agent with a shell works through the CLI, the `AGENTS.md` line, and
   the hooks, which cost less context than tool schemas.
 - The server finds the registry exactly like the CLI, by walking up from
   its working directory, on every tool call. It does not use MCP roots and
@@ -410,7 +405,7 @@ contract and acceptance checks for v1.
   `blt` in the shell, each tool mirrors the command of the same name, and a
   person's refusal of a tool call is final and is not retried through the
   shell. Only agents connected to the server see that paragraph; the
-  `AGENTS.md` block and `blt start` do not mention MCP. `initialize` also
+  `AGENTS.md` line and `blt start` do not mention MCP. `initialize` also
   returns `serverInfo` with name `blt` and the package version. The server
   answers `ping`, accepts and ignores notifications it does not use, rejects
   unknown methods with `-32601`, and writes nothing but JSON-RPC messages
@@ -531,10 +526,10 @@ contract and acceptance checks for v1.
   eligible issues, warns on stderr, and exits 0; `claim` of the affected
   issue fails. Add a file with merge conflict markers: `ready`, `list`, and
   `tree` still list every other issue, warn, and exit 0.
-- Run `init` on a project with an older unmodified block, a customized
-  block, a newer block, and no block: the first is upgraded, the second and
-  third are left byte-for-byte, the fourth is appended; `init` and `check`
-  report exactly the cases described in Agent Instructions Block.
+- Run `init` on an `AGENTS.md` with the line, with the line twice, without
+  it, and with near misses (indented, edited, inside a list item), in LF and
+  CRLF: files with the line stay byte-for-byte and `check` is clean; the
+  others get the line appended and `check` reports it missing before.
 - The full test suite builds and passes on the declared minimum Rust
   version as well as on current stable.
 - `add` without `-p` stores priority 2. An issue file with
@@ -582,7 +577,7 @@ contract and acceptance checks for v1.
   read commands succeed.
 - `blt mcp` started in a subdirectory of a project completes `initialize`
   with `instructions` equal to the `blt start` text plus the MCP paragraph;
-  the `AGENTS.md` block and `blt start` contain no mention of MCP. `tools/list` names exactly
+  the `AGENTS.md` line and `blt start` contain no mention of MCP. `tools/list` names exactly
   the commands of the dispatcher (minus `mcp`, plus `dep_add`/`dep_rm`),
   read tools carry `readOnlyHint`, and the decision tools' descriptions
   start with "A person's decision:". For every tool, a scripted call gives

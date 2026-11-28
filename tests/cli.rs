@@ -537,9 +537,7 @@ fn init_installs_agent_integrations_idempotently() {
     assert_eq!(ok(&proj, &["init"]), "initialized .blt/\n");
     let agents = fs::read_to_string(proj.join("AGENTS.md")).unwrap();
     assert!(agents.starts_with(agents_orig), "original bytes preserved");
-    assert_eq!(agents.matches("<!-- BEGIN BLT v:1 hash:").count(), 1);
-    assert_eq!(agents.matches("<!-- END BLT -->").count(), 1);
-    assert!(agents.contains("blt claim ID") && agents.contains("blt recall"));
+    assert_eq!(agents, format!("{agents_orig}\n\n{AGENTS_LINE}\n"));
 
     let claude: Value =
         serde_json::from_str(&fs::read_to_string(proj.join(".claude/settings.json")).unwrap())
@@ -1027,35 +1025,28 @@ fn hist_last_value(history: &str, label: &str) -> Option<String> {
     None
 }
 
-fn fnv1a(text: &str) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in text.replace("\r\n", "\n").bytes() {
-        h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3);
-    }
-    h
-}
+const AGENTS_LINE: &str = "This project tracks work with `blt` (https://github.com/EntropyLogix/Billet): run `blt start` before you begin and follow its rules; if `blt` is missing, ask a person to install it.";
 
 #[test]
-fn agent_instruction_block_states_preserve_outside_bytes() {
-    let base = dir("agcanon");
-    ok(&base, &["init", "--no-hooks"]);
-    let written = fs::read_to_string(base.join("AGENTS.md")).unwrap();
-    let start = written.find("<!-- BEGIN BLT v:1 hash:").unwrap();
-    let stop = written.find("<!-- END BLT -->").unwrap() + "<!-- END BLT -->".len();
-    let canonical = written[start..stop].to_string();
-    let body =
-        &canonical[canonical.find('\n').unwrap() + 1..canonical.rfind("<!-- END BLT -->").unwrap()];
-    assert!(
-        canonical.contains(&format!("hash:{:016x}", fnv1a(body))),
-        "fresh block hash must cover the normalized body: {canonical}"
+fn agent_instruction_line_states_preserve_outside_bytes() {
+    let fresh = dir("agfresh");
+    ok(&fresh, &["init", "--no-hooks"]);
+    assert_eq!(
+        fs::read_to_string(fresh.join("AGENTS.md")).unwrap(),
+        format!("{AGENTS_LINE}\n")
     );
 
     for nl in ["\n", "\r\n"] {
-        let canon = canonical.replace('\n', nl);
-        let pre = format!("pre-marker text{nl}{nl}");
-        let post = format!("{nl}post-marker text{nl}");
+        let pre = format!("pre text{nl}{nl}");
+        let post = format!("{nl}post text{nl}");
+        let line = AGENTS_LINE;
+        let near = [
+            format!("  {line}"),
+            line.trim_end_matches('.').to_string(),
+            format!("- {line}"),
+        ];
 
-        let fixture = |name: &str, agents: String| -> TestDir {
+        let fixture = |name: &str, agents: &str| -> TestDir {
             let d = dir(name);
             ok(&d, &["init", "--no-hooks"]);
             fs::write(d.join("AGENTS.md"), agents).unwrap();
@@ -1070,167 +1061,55 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
             assert_eq!(tree_bytes(&d.join(".blt")), tree);
             String::from_utf8(o.stdout).unwrap()
         };
-
-        // missing block: check reports, init appends without touching prior bytes
-        let d = fixture("ag-miss", format!("{pre}custom rules{nl}"));
-        let out = check_unchanged(&d, 1);
-        assert!(
-            out.contains("AGENTS.md: Billet instructions are missing"),
-            "{out}"
-        );
-        assert!(out.contains("run `blt init`"), "{out}");
-        let old = fs::read_to_string(d.join("AGENTS.md")).unwrap();
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            ".blt/ already initialized\n"
-        );
-        let new = fs::read_to_string(d.join("AGENTS.md")).unwrap();
-        assert_eq!(new, format!("{old}{nl}{canon}{nl}"), "append: {new}");
-
-        // current intact: clean check, init is a no-op
-        let file = format!("{pre}{canon}{post}");
-        let d = fixture("ag-cur", file.clone());
-        let out = check_unchanged(&d, 0);
-        assert!(out.contains("clean"), "{out}");
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            ".blt/ already initialized\n"
-        );
-        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
-
-        // older intact: check reports outdated, init upgrades surgically
-        let older = canon.replace("<!-- BEGIN BLT v:1 ", "<!-- BEGIN BLT v:0 ");
-        let d = fixture("ag-old", format!("{pre}{older}"));
-        let out = check_unchanged(&d, 1);
-        assert!(out.contains("Billet instructions are outdated"), "{out}");
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            ".blt/ already initialized\n"
-        );
-        assert_eq!(
-            fs::read_to_string(d.join("AGENTS.md")).unwrap(),
-            format!("{pre}{canon}"),
-            "upgrade must preserve outside bytes and the file ending at END"
-        );
-        let out = check_unchanged(&d, 0);
-        assert!(out.contains("clean"), "{out}");
-        let before = fs::read(d.join("AGENTS.md")).unwrap();
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            ".blt/ already initialized\n"
-        );
-        assert_eq!(
-            fs::read(d.join("AGENTS.md")).unwrap(),
-            before,
-            "re-init idempotent"
-        );
-
-        // older intact with genuinely different body but its own valid hash
-        let old_body = format!("## Issue tracking with Billet{nl}{nl}old rules{nl}");
-        let older2 = format!(
-            "<!-- BEGIN BLT v:0 hash:{:016x} -->{nl}{old_body}<!-- END BLT -->",
-            fnv1a(&old_body)
-        );
-        let d = fixture("ag-old2", format!("{pre}{older2}{post}"));
-        let out = check_unchanged(&d, 1);
-        assert!(out.contains("Billet instructions are outdated"), "{out}");
-        assert!(!out.contains("customized"), "{out}");
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            ".blt/ already initialized\n"
-        );
-        assert_eq!(
-            fs::read_to_string(d.join("AGENTS.md")).unwrap(),
-            format!("{pre}{canon}{post}")
-        );
-
-        // current customized: not a problem, init reports and leaves bytes
-        let custom = canon.replace(
-            "<!-- END BLT -->",
-            &format!("- our local rule{nl}<!-- END BLT -->"),
-        );
-        let file = format!("{pre}{custom}{post}");
-        let d = fixture("ag-ccu", file.clone());
-        let out = check_unchanged(&d, 0);
-        assert!(out.contains("clean"), "{out}");
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            ".blt/ already initialized\nAGENTS.md: Billet instructions are customized; left unchanged\n"
-        );
-        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
-
-        // older customized: check reports it, init leaves bytes and reports
-        let custom_old = older.replace(
-            "<!-- END BLT -->",
-            &format!("- our local rule{nl}<!-- END BLT -->"),
-        );
-        let file = format!("{pre}{custom_old}{post}");
-        let d = fixture("ag-ocu", file.clone());
-        let report = check_unchanged(&d, 1);
-        assert!(
-            report.contains("customized Billet instructions are outdated"),
-            "{report}"
-        );
-        assert!(report.contains("reapply"), "{report}");
-        assert_eq!(
-            ok(&d, &["init", "--no-hooks"]),
-            format!(".blt/ already initialized\n{report}"),
-            "init must repeat the check report for NeedsAttention"
-        );
-        assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
-
-        // newer version (intact and customized): same unsupported report
-        for (name, seed) in [("ag-new", &canon), ("ag-newc", &custom)] {
-            let newer = seed.replace("<!-- BEGIN BLT v:1 ", "<!-- BEGIN BLT v:2 ");
-            let file = format!("{pre}{newer}{post}");
-            let d = fixture(name, file.clone());
-            let report = check_unchanged(&d, 1);
-            assert!(
-                report.contains("version 2") && report.contains("newer"),
-                "{report}"
-            );
+        let init_writes = |d: &Path, expected: &str| {
             assert_eq!(
-                ok(&d, &["init", "--no-hooks"]),
-                format!(".blt/ already initialized\n{report}"),
-                "{name}: init never downgrades"
+                ok(d, &["init", "--no-hooks"]),
+                ".blt/ already initialized\n"
             );
-            assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
-        }
+            assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), expected);
+        };
 
-        // malformed and duplicated markers: check reports, init refuses
-        for (name, file) in [
-            (
-                "ag-mal",
-                format!("{pre}<!-- BEGIN BLT v:1 -->{nl}body{nl}<!-- END BLT -->{nl}"),
-            ),
-            ("ag-dup", format!("{pre}{canon}{nl}{canon}{nl}")),
-            ("ag-ind", format!("{pre}  {canon}{nl}")),
-        ] {
-            let d = fixture(name, file.clone());
+        let missing = [
+            (format!("{pre}custom rules{nl}"), format!("{nl}{line}{nl}")),
+            (format!("{pre}custom rules"), format!("{nl}{nl}{line}{nl}")),
+            (format!("{pre}custom rules{nl}{nl}"), format!("{line}{nl}")),
+            (format!("{pre}{}{post}", near[0]), format!("{nl}{line}{nl}")),
+            (format!("{pre}{}{post}", near[1]), format!("{nl}{line}{nl}")),
+            (format!("{}{nl}", near[2]), format!("{nl}{line}{nl}")),
+        ];
+        for (i, (file, appended)) in missing.iter().enumerate() {
+            let d = fixture(&format!("ag-miss{i}"), file);
             let out = check_unchanged(&d, 1);
             assert!(
-                out.contains("malformed or duplicated Billet instruction markers"),
-                "{name}: {out}"
+                out.contains("AGENTS.md: Billet instructions are missing"),
+                "{out}"
             );
-            let o = run(&d, &["init", "--no-hooks"]);
-            assert_eq!(o.status.code(), Some(1), "{name}");
-            assert!(
-                String::from_utf8_lossy(&o.stderr)
-                    .contains("AGENTS.md: malformed or duplicated Billet instruction markers"),
-                "{name}: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-            assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
+            assert!(out.contains("run `blt init`"), "{out}");
+            init_writes(&d, &format!("{file}{appended}"));
+            assert!(check_unchanged(&d, 0).contains("clean"));
+            init_writes(&d, &format!("{file}{appended}"));
+        }
+
+        for (i, file) in [
+            format!("{line}{nl}"),
+            format!("{pre}{line}{post}"),
+            format!("{pre}{line}"),
+            format!("{pre}{line}{nl}{line}{nl}"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let d = fixture(&format!("ag-cur{i}"), file);
+            assert!(check_unchanged(&d, 0).contains("clean"));
+            init_writes(&d, file);
         }
     }
 }
 
 #[test]
-fn agent_block_and_start_cover_workflow_rules_in_order() {
+fn start_covers_workflow_rules_in_order() {
     let d = dir("agentrules");
     ok(&d, &["init", "--no-hooks"]);
-    let agents = fs::read_to_string(d.join("AGENTS.md")).unwrap();
-    let block = &agents[agents.find("<!-- BEGIN BLT").unwrap()..];
     let text = ok(&d, &["start"]);
     let json: Value = serde_json::from_str(&ok(&d, &["start", "--json"])).unwrap();
     let hook: Value = serde_json::from_str(&ok(&d, &["start", "--hook-json"])).unwrap();
@@ -1270,21 +1149,15 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
         "your own memory",
         "blt check` and report to a person",
     ];
-    for hay in [
-        workflow,
-        block.strip_prefix("<!-- BEGIN BLT").unwrap_or(block),
-    ] {
-        let mut at = 0;
-        for token in tokens.iter().skip(if hay.starts_with("Billet workflow") {
-            0
-        } else {
-            1
-        }) {
-            let i = hay[at..]
-                .find(token)
-                .unwrap_or_else(|| panic!("{token:?} missing at {at} in {hay:?}"));
-            at += i + token.len();
-        }
+    let agents = fs::read_to_string(d.join("AGENTS.md")).unwrap();
+    let mut at = 0;
+    for token in tokens {
+        let i = workflow[at..]
+            .find(token)
+            .unwrap_or_else(|| panic!("{token:?} missing at {at} in {workflow:?}"));
+        at += i + token.len();
+    }
+    for hay in [workflow, agents.as_str()] {
         for gone in [
             ["Entro", "pyJig"].concat(),
             ["ENTROPY", "JIG"].concat(),

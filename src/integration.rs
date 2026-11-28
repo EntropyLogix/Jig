@@ -12,22 +12,12 @@ struct Change {
     text: String,
 }
 
-pub(crate) fn install(root: &Path, with_hooks: bool) -> Result<Option<String>, String> {
+pub(crate) fn install(root: &Path, with_hooks: bool) -> Result<(), String> {
     let mut changes = Vec::new();
     let path = root.join("AGENTS.md");
-    let notice = match instructions::update(&read(&path)?).map_err(|e| format!("AGENTS.md: {e}"))? {
-        instructions::Update::Write(text) => {
-            changes.push(Change { path, text });
-            None
-        }
-        instructions::Update::Unchanged => None,
-        instructions::Update::Customized => {
-            Some("AGENTS.md: Billet instructions are customized; left unchanged".to_string())
-        }
-        instructions::Update::NeedsAttention { problem, hint } => {
-            Some(format!("AGENTS.md: {problem}\n  hint: {hint}"))
-        }
-    };
+    if let Some(text) = instructions::update(&read(&path)?) {
+        changes.push(Change { path, text });
+    }
     if with_hooks {
         for (directory, filename) in CONFIGS {
             let dir = root.join(directory);
@@ -45,7 +35,7 @@ pub(crate) fn install(root: &Path, with_hooks: bool) -> Result<Option<String>, S
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
         store::atomic_write(&path, text.as_bytes())?;
     }
-    Ok(notice)
+    Ok(())
 }
 
 fn read(path: &Path) -> Result<String, String> {
