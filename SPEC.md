@@ -11,8 +11,8 @@ contract and acceptance checks for v1.
 - Install `blt` once per user and machine, on `PATH`. The project lives at
   `https://github.com/EntropyLogix/Billet`; the package and library are named
   `billet` and the binary `blt`. Machine-local state lives under
-  `$XDG_STATE_HOME/billet` (or `~/.local/state/billet`).
-- `blt init`, run in the project root, creates `.billet/`. Subsequent commands
+  `$XDG_STATE_HOME/blt` (or `~/.local/state/blt`).
+- `blt init`, run in the project root, creates `.blt/`. Subsequent commands
   find it by walking up from the current directory. Without a registry in the
   current project, report an error. No path argument, project override,
   machine-local project config, or redirect to another checkout is needed.
@@ -43,7 +43,7 @@ contract and acceptance checks for v1.
 
 - There is one Markdown file per issue, with YAML frontmatter and a
   human-readable body. Active statuses (`proposed`, `open`, `claimed`, `review`)
-  live in `.billet/open/`; closed issues live in `.billet/closed/`. The archive
+  live in `.blt/open/`; closed issues live in `.blt/closed/`. The archive
   can be browsed without `blt`. Closing and reopening move the file, not its ID.
 - Every issue has two identifiers with separate jobs. The **key** is the
   internal, random identity: it names the file, the documents directory,
@@ -68,7 +68,7 @@ contract and acceptance checks for v1.
   `ready`, and `tree` warn once per duplicate; `check` reports it. A person
   fixes it with `blt update ID --number N` (an unused number, on a
   top-level issue, recorded in the history); agents do not renumber.
-- The prefix is the project setting `prefix` in `.billet/config.json`
+- The prefix is the project setting `prefix` in `.blt/config.json`
   (`{"prefix": "B"}`), written by `blt init [--prefix P]` with default `B`:
   1 to 8 uppercase ASCII letters, optionally followed by `-` (`B`, `AN`,
   `AN-`). Handles are derived, so changing the prefix changes every handle
@@ -84,7 +84,7 @@ contract and acceptance checks for v1.
   number after the largest direct child under the lock, including closed
   children. A closed child does not free its number.
 - Writes use a local lock and atomic file replacement. Processes using the
-  same `.billet/` cannot both claim the same issue. Independently edited copies
+  same `.blt/` cannot both claim the same issue. Independently edited copies
   may conflict after synchronization; we accept that rather than partition
   the queue. Do not silently overwrite an issue, renumber one side, or pick
   the newest claim by timestamp. When a conflict is present in the files,
@@ -227,7 +227,7 @@ contract and acceptance checks for v1.
   it with that round's history entry. `close ID --reason TEXT` also accepts
   optional `--summary TEXT`. Put it in `## Closing Summary` before the full
   description for easy browsing without the CLI. Keep the reason in
-  `## History` and the full description, notes, and history in `.billet/closed/`
+  `## History` and the full description, notes, and history in `.blt/closed/`
   whether or not a summary was supplied. Show the summary with the full
   issue, not in `start`, `ready`, or default lists. No summary-only view
   is needed in v1.
@@ -243,7 +243,7 @@ contract and acceptance checks for v1.
 
 - Long material that belongs to one issue — analyses, review or audit
   reports, measurements, instructions for an implementer — lives in
-  `.billet/docs/KEY/`, where `KEY` is the issue's key (dotted subtask keys
+  `.blt/docs/KEY/`, where `KEY` is the issue's key (dotted subtask keys
   included), so renumbering never moves documents. Any files and
   subdirectories may be stored there; Markdown is
   the convention. The description references the documents that matter;
@@ -252,17 +252,17 @@ contract and acceptance checks for v1.
   and agents write the files directly. `init` does not create `docs/`, and
   a missing `docs/` is not a problem.
 - The directory belongs to the key, not to a status or a number: closing,
-  reopening, renumbering, and every other change leave `.billet/docs/KEY/`
+  reopening, renumbering, and every other change leave `.blt/docs/KEY/`
   where it is.
-- `show ID` ends with a `Documents: .billet/docs/KEY/` line naming the
+- `show ID` ends with a `Documents: .blt/docs/KEY/` line naming the
   directory even when it does not exist yet, followed by the regular files
   under it, recursively, as paths relative to the project root (for example
-  `.billet/docs/5a3f35/analysis.md`), sorted, or by `(none)` on the same line
+  `.blt/docs/5a3f35/analysis.md`), sorted, or by `(none)` on the same line
   when there are none. It does not print their contents. JSON adds
   `docs_dir` (the directory path) and `docs`, an array of the file paths
   (`[]` when there are none).
-- A broken document location never hides the issue. When `.billet/docs` or
-  `.billet/docs/KEY` is not a real directory, or part of it cannot be read,
+- A broken document location never hides the issue. When `.blt/docs` or
+  `.blt/docs/KEY` is not a real directory, or part of it cannot be read,
   `show` still prints the issue and its `Documents:` line (JSON with the
   files it could list), warns on stderr with the path relative to the
   project root and a pointer to `blt check`, and exits 0. `check` reports
@@ -274,7 +274,7 @@ contract and acceptance checks for v1.
   show compact views, including in JSON. `show ID` opens one full issue,
   regardless of whether it is in `open/` or `closed/`. Keep results,
   decisions, and references to evidence, not session transcripts or logs.
-- `.billet/memory.md` is a human-readable store of current facts, not a cache
+- `.blt/memory.md` is a human-readable store of current facts, not a cache
   or append-only log. `remember TOPIC TEXT` updates one named fact, `recall
   TOPIC` reads one fact, and `recall` with no topic lists only the names.
   No automatic key generation or `--key` is needed. `start` never loads the
@@ -282,8 +282,8 @@ contract and acceptance checks for v1.
 
 ### Agent Instructions Block
 
-- The block is delimited by `<!-- BEGIN BILLET v:N hash:H -->` and
-  `<!-- END BILLET -->`, where `N` is the block format version and `H` is a
+- The block is delimited by `<!-- BEGIN BLT v:N hash:H -->` and
+  `<!-- END BLT -->`, where `N` is the block format version and `H` is a
   short hash of the text between the markers as `blt` wrote it.
 - `init` appends the block when no markers exist. When the markers exist
   and the hash matches the text, the block is unmodified: `init` replaces
@@ -353,11 +353,11 @@ contract and acceptance checks for v1.
   `open` issue with `claim_id` or `assignee`, a `claimed` issue without
   `claim_id`, or `closed_at`, `release`, or a closing summary on an active
   issue), a pending or mismatched move record, an unreadable `memory.md`,
-  a missing or invalid `.billet/config.json`, a number used by two issues,
-  unexpected files in `open/` or `closed/`, an entry in `.billet/docs/` that
+  a missing or invalid `.blt/config.json`, a number used by two issues,
+  unexpected files in `open/` or `closed/`, an entry in `.blt/docs/` that
   is not a directory or is not named after an existing issue key (hint:
   rename it to the issue key or remove it), and the legacy
-  `/.*.tmp-*` rule in `.billet/.gitignore`.
+  `/.*.tmp-*` rule in `.blt/.gitignore`.
 - Unknown legacy metadata is not a problem: a `closed` issue may have
   `closed_at: null`, and an issue in `review` may have no `assignee` or
   `claim_id` if it was never claimed. `rework` of such an issue assigns a
@@ -411,7 +411,7 @@ contract and acceptance checks for v1.
   person's refusal of a tool call is final and is not retried through the
   shell. Only agents connected to the server see that paragraph; the
   `AGENTS.md` block and `blt start` do not mention MCP. `initialize` also
-  returns `serverInfo` with name `billet` and the package version. The server
+  returns `serverInfo` with name `blt` and the package version. The server
   answers `ping`, accepts and ignores notifications it does not use, rejects
   unknown methods with `-32601`, and writes nothing but JSON-RPC messages
   to stdout. `init` does not register the server with any client; the
@@ -439,7 +439,7 @@ contract and acceptance checks for v1.
   every file has the key, and a file without it is invalid like one without
   any other fixed key. Reserve
   top-level `## Closing Summary`, `## History`, and `## Notes` for the managed
-  sections. `.billet/config.json` holds the per-project settings; today only
+  sections. `.blt/config.json` holds the per-project settings; today only
   `prefix`, and an unknown key makes it invalid.
 - **Dates and readiness.** New timestamps use UTC. `defer_until` is a UTC
   calendar date; the issue is eligible on that day. Sort `ready` by priority
@@ -460,7 +460,7 @@ contract and acceptance checks for v1.
   with a nonzero exit code and no partial JSON.
 - **Read-only access.** Read commands (`start`, `ready`, `show`, `list`,
   `tree`, `recall`, `check`) work in a checkout without write access to
-  `.billet/`; they do not need to create or write `.billet/.lock`. Where they
+  `.blt/`; they do not need to create or write `.blt/.lock`. Where they
   can write, the non-`check` read commands may finish an interrupted move as
   before; where they cannot, a pending move is reported as an error.
 - **Grouped lists.** Only `blt list` without arguments (apart from
@@ -561,13 +561,13 @@ contract and acceptance checks for v1.
 - `show` gives `Ready: yes` for a ready issue and, for one issue that is
   deferred, blocked, and waiting for a subtask at once, `Ready: no` with all
   three reasons in the agreed order; JSON `readiness` carries the same.
-- `show` of an issue without documents prints `Documents: .billet/docs/KEY/
+- `show` of an issue without documents prints `Documents: .blt/docs/KEY/
   (none)` and JSON `docs: []` with `docs_dir`. Put files, including one in
-  a subdirectory, in `.billet/docs/KEY/`: `show` lists their paths in text and
+  a subdirectory, in `.blt/docs/KEY/`: `show` lists their paths in text and
   in JSON `docs`; `close` and `reopen` leave
-  them in place. A directory in `.billet/docs/` named after no issue and a
-  plain file directly in `.billet/docs/` are reported by `check`; a registry
-  without `docs/` is clean. With `.billet/docs/KEY` replaced by a file, `show`
+  them in place. A directory in `.blt/docs/` named after no issue and a
+  plain file directly in `.blt/docs/` are reported by `check`; a registry
+  without `docs/` is clean. With `.blt/docs/KEY` replaced by a file, `show`
   prints the issue, warns with the relative path, and exits 0.
 - With issues in every status, `list` prints the non-empty groups in the
   order `review`, `proposed`, `claimed`, `open` with counts and rows in the

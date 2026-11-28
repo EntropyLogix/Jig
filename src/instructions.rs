@@ -4,8 +4,8 @@ use std::fs;
 use std::path::Path;
 
 const VERSION: u32 = 1;
-const BEGIN: &str = "<!-- BEGIN BILLET v:";
-const END: &str = "<!-- END BILLET -->";
+const BEGIN: &str = "<!-- BEGIN BLT v:";
+const END: &str = "<!-- END BLT -->";
 
 macro_rules! text {
     ($heading:literal) => {
@@ -67,7 +67,7 @@ fn parse_opener(line: &str) -> Option<(u32, u64)> {
 }
 
 fn marker_candidate(line: &str) -> bool {
-    for prefix in ["<!-- BEGIN BILLET", "<!-- END BILLET"] {
+    for prefix in ["<!-- BEGIN BLT", "<!-- END BLT"] {
         if let Some(rest) = line.trim().strip_prefix(prefix)
             && (rest.is_empty() || rest.starts_with(|c: char| !c.is_alphanumeric()))
         {

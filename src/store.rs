@@ -42,13 +42,13 @@ pub struct Loaded {
     pub text: String,
 }
 
-const MOVE_MAGIC: &str = "BILLET-MOVE-1";
+const MOVE_MAGIC: &str = "BLT-MOVE-1";
 const GITIGNORE: &str = "/.lock\n/.move\n.*.tmp-*\n";
 const MEMORY_INIT: &str = "# Project Memory\n";
 
 pub(crate) fn diagnostic_path(path: &Path) -> &Path {
     path.ancestors()
-        .find(|p| p.file_name().is_some_and(|n| n == ".billet"))
+        .find(|p| p.file_name().is_some_and(|n| n == ".blt"))
         .and_then(|billet| billet.parent())
         .and_then(|root| path.strip_prefix(root).ok())
         .unwrap_or(path)
@@ -77,7 +77,7 @@ pub(crate) fn metadata_of(path: &Path, directory: bool) -> Result<Option<fs::Met
 fn validate_registry(billet: &Path) -> Result<(), String> {
     if metadata_of(&billet.join("memory.md"), false)?.is_none() {
         return Err(format!(
-            "partial .billet registry at {}; run `blt init` to repair it",
+            "partial .blt registry at {}; run `blt init` to repair it",
             diagnostic_path(billet).display()
         ));
     }
@@ -88,7 +88,7 @@ fn validate_registry(billet: &Path) -> Result<(), String> {
 }
 
 fn registry_at(dir: &Path) -> Result<Option<PathBuf>, String> {
-    let billet = dir.join(".billet");
+    let billet = dir.join(".blt");
     if metadata_of(&billet, true)?.is_none() {
         return Ok(None);
     }
@@ -108,7 +108,7 @@ fn ancestors(dir: &Path) -> Vec<PathBuf> {
 
 pub(crate) fn discover_raw(cwd: &Path) -> Result<PathBuf, String> {
     for dir in ancestors(cwd) {
-        let billet = dir.join(".billet");
+        let billet = dir.join(".blt");
         if metadata_of(&billet, true)?.is_some() {
             return Ok(billet);
         }
@@ -116,7 +116,7 @@ pub(crate) fn discover_raw(cwd: &Path) -> Result<PathBuf, String> {
             break;
         }
     }
-    Err("no .billet registry found; run `blt init` in the project root".to_string())
+    Err("no .blt registry found; run `blt init` in the project root".to_string())
 }
 
 pub fn discover(cwd: &Path) -> Result<PathBuf, String> {
@@ -144,7 +144,7 @@ pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
             crate::config::PREFIX_RULE
         ));
     }
-    let billet = cwd.join(".billet");
+    let billet = cwd.join(".blt");
     if metadata_of(&billet, true)?.is_some() {
         validate_children(&billet)?;
     } else {
@@ -152,8 +152,8 @@ pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
             for dir in ancestors(cwd).into_iter().skip(1) {
                 if registry_at(&dir)?.is_some() {
                     return Err(format!(
-                        "refusing to nest .billet under existing registry at {}",
-                        diagnostic_path(&dir.join(".billet")).display()
+                        "refusing to nest .blt under existing registry at {}",
+                        diagnostic_path(&dir.join(".blt")).display()
                     ));
                 }
                 if dir.join(".git").exists() {
@@ -204,7 +204,7 @@ pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
         let current = crate::config::load(&billet)?;
         if current.prefix != prefix {
             return Err(format!(
-                "this registry uses prefix {:?}; edit .billet/config.json to change it",
+                "this registry uses prefix {:?}; edit .blt/config.json to change it",
                 current.prefix
             ));
         }
@@ -342,7 +342,7 @@ pub(crate) fn with_read<T>(
                         .map_err(|e| format!("acquire lock for pending move: {e}"))?;
                     recover(billet).map_err(|e| {
                         format!(
-                            "pending .billet/.move recovery failed: {e}; finishing the journal needs a writable registry — inspect it with `blt check`"
+                            "pending .blt/.move recovery failed: {e}; finishing the journal needs a writable registry — inspect it with `blt check`"
                         )
                     })?;
                 }
@@ -353,9 +353,9 @@ pub(crate) fn with_read<T>(
                 let result = match pending {
                     Err(e) => Err(e),
                     Ok(true) if matches!(recovery, Recovery::Allow) => Err(
-                        ".billet/.move is pending but no lock exists; the registry needs a writable \
+                        ".blt/.move is pending but no lock exists; the registry needs a writable \
                          checkout to finish it — inspect with `blt check` and run a write command \
-                         where .billet is writable"
+                         where .blt is writable"
                             .to_string(),
                     ),
                     _ => Ok(read()),
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn read_rechecks_lock_created_mid_read() {
         let root = scratch("readrecheck");
-        let billet = root.join(".billet");
+        let billet = root.join(".blt");
         fs::create_dir(&billet).unwrap();
         fs::create_dir(billet.join("open")).unwrap();
         let calls = AtomicUsize::new(0);
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn read_retries_and_recovers_move_staged_mid_read() {
         let root = scratch("readmove");
-        let billet = root.join(".billet");
+        let billet = root.join(".blt");
         fs::create_dir(&billet).unwrap();
         fs::create_dir(billet.join("open")).unwrap();
         fs::create_dir(billet.join("closed")).unwrap();

@@ -18,7 +18,7 @@ fn hex(b: &[u8]) -> String {
 }
 
 fn salt_path(state: &Path) -> PathBuf {
-    state.join("billet").join("install-id")
+    state.join("blt").join("install-id")
 }
 
 fn parse_salt(text: &str) -> Result<[u8; 16], String> {

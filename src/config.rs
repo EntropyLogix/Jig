@@ -36,7 +36,7 @@ pub fn render(prefix: &str) -> String {
 }
 
 pub fn load(billet: &Path) -> Result<Config, String> {
-    read(billet).map_err(|e| format!(".billet/config.json: {e}"))
+    read(billet).map_err(|e| format!(".blt/config.json: {e}"))
 }
 
 pub fn read(billet: &Path) -> Result<Config, String> {

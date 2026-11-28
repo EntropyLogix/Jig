@@ -128,7 +128,7 @@ fn render_key(d: &Path, token: &str) -> String {
     }
     let root = token.split('.').next().unwrap();
     for place in ["open", "closed"] {
-        if let Ok(text) = fs::read_to_string(d.join(format!(".billet/{place}/{root}.md")))
+        if let Ok(text) = fs::read_to_string(d.join(format!(".blt/{place}/{root}.md")))
             && let Ok(issue) = billet::issue::decode(&text)
             && let Some(number) = issue.number
         {
@@ -172,7 +172,7 @@ fn key_of(d: &Path, handle: &str) -> String {
 }
 
 fn journal(old: &str, new: &str) -> String {
-    format!("BILLET-MOVE-1\n{}\n{}\n{old}{new}", old.len(), new.len())
+    format!("BLT-MOVE-1\n{}\n{}\n{old}{new}", old.len(), new.len())
 }
 
 #[test]
@@ -180,11 +180,11 @@ fn init_and_nested_discovery() {
     let d = dir("init");
     let proj = d.join("proj");
     fs::create_dir_all(&proj).unwrap();
-    assert_eq!(ok(&proj, &["init"]), "initialized .billet/\n");
-    assert!(proj.join(".billet/open").is_dir());
-    assert!(proj.join(".billet/closed").is_dir());
-    assert!(proj.join(".billet/memory.md").is_file());
-    let gi = fs::read_to_string(proj.join(".billet/.gitignore")).unwrap();
+    assert_eq!(ok(&proj, &["init"]), "initialized .blt/\n");
+    assert!(proj.join(".blt/open").is_dir());
+    assert!(proj.join(".blt/closed").is_dir());
+    assert!(proj.join(".blt/memory.md").is_file());
+    let gi = fs::read_to_string(proj.join(".blt/.gitignore")).unwrap();
     assert!(gi.contains("/.lock") && gi.contains("/.move") && gi.contains(".*.tmp-"));
     assert!(
         gi.lines().any(|s| s == ".*.tmp-*"),
@@ -199,9 +199,9 @@ fn init_and_nested_discovery() {
 
     let e = bad(&deep, &["init"]);
     assert!(e.contains("nest"), "{e}");
-    assert_eq!(ok(&proj, &["init"]), ".billet/ already initialized\n");
+    assert_eq!(ok(&proj, &["init"]), ".blt/ already initialized\n");
 
-    let mem = proj.join(".billet/memory.md");
+    let mem = proj.join(".blt/memory.md");
     let before = fs::read_to_string(&mem).unwrap();
     ok(&proj, &["init"]);
     assert_eq!(fs::read_to_string(&mem).unwrap(), before);
@@ -217,26 +217,26 @@ fn git_boundary_stops_discovery() {
     fs::create_dir_all(&repo).unwrap();
     fs::write(repo.join(".git"), "gitdir: /elsewhere\n").unwrap();
     let e = bad(&repo, &["ready"]);
-    assert!(e.contains("no .billet"), "{e}");
+    assert!(e.contains("no .blt"), "{e}");
     let deep = repo.join("sub");
     fs::create_dir_all(&deep).unwrap();
     let e = bad(&deep, &["ready"]);
-    assert!(e.contains("no .billet"), "{e}");
-    assert_eq!(ok(&repo, &["init"]), "initialized .billet/\n");
+    assert!(e.contains("no .blt"), "{e}");
+    assert_eq!(ok(&repo, &["init"]), "initialized .blt/\n");
 }
 
 #[test]
 fn missing_dirs_are_empty_registry() {
     let d = dir("emptydirs");
     let proj = d.join("proj");
-    fs::create_dir_all(proj.join(".billet")).unwrap();
-    fs::write(proj.join(".billet/memory.md"), "# Project Memory\n").unwrap();
-    fs::write(proj.join(".billet/config.json"), "{\"prefix\": \"B\"}\n").unwrap();
+    fs::create_dir_all(proj.join(".blt")).unwrap();
+    fs::write(proj.join(".blt/memory.md"), "# Project Memory\n").unwrap();
+    fs::write(proj.join(".blt/config.json"), "{\"prefix\": \"B\"}\n").unwrap();
     assert_eq!(ok(&proj, &["ready"]), "");
     let id = add(&proj, "x");
     assert_eq!(id, "B1", "numbering starts at 1");
     let key = key_of(&proj, &id);
-    assert!(proj.join(format!(".billet/open/{key}.md")).is_file());
+    assert!(proj.join(format!(".blt/open/{key}.md")).is_file());
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn concurrent_claim_single_winner() {
         String::from_utf8_lossy(&ob.stderr)
     );
     let key = key_of(&d, &id);
-    let text = fs::read_to_string(d.join(format!(".billet/open/{key}.md"))).unwrap();
+    let text = fs::read_to_string(d.join(format!(".blt/open/{key}.md"))).unwrap();
     assert!(text.contains("status: claimed"));
     assert!(text.contains("claim_id: \""));
     let i = billet::issue::decode(&text).unwrap();
@@ -271,12 +271,12 @@ fn same_name_copies_get_distinct_claim_ids() {
     ok(&d1, &["init"]);
     ok(&d2, &["init"]);
     let shared = fm("1aaaaa", "open", "");
-    fs::write(d1.join(".billet/open/1aaaaa.md"), &shared).unwrap();
-    fs::write(d2.join(".billet/open/1aaaaa.md"), &shared).unwrap();
+    fs::write(d1.join(".blt/open/1aaaaa.md"), &shared).unwrap();
+    fs::write(d2.join(".blt/open/1aaaaa.md"), &shared).unwrap();
     let o1 = ok(&d1, &["claim", "1aaaaa", "--by", "bot"]);
     let o2 = ok(&d2, &["claim", "1aaaaa", "--by", "bot"]);
-    let t1 = fs::read_to_string(d1.join(".billet/open/1aaaaa.md")).unwrap();
-    let t2 = fs::read_to_string(d2.join(".billet/open/1aaaaa.md")).unwrap();
+    let t1 = fs::read_to_string(d1.join(".blt/open/1aaaaa.md")).unwrap();
+    let t2 = fs::read_to_string(d2.join(".blt/open/1aaaaa.md")).unwrap();
     let cid = |t: &str| billet::issue::decode(t).unwrap().claim_id.unwrap();
     assert_ne!(cid(&t1), cid(&t2));
     assert!(!o1.contains(&cid(&t1)) && !o2.contains(&cid(&t2)));
@@ -320,7 +320,7 @@ fn show_documents_directory_and_files() {
     ok(&d, &["init", "--no-hooks"]);
     let id = add(&d, "documented");
     let key = key_of(&d, &id);
-    let docs_dir = format!(".billet/docs/{key}/");
+    let docs_dir = format!(".blt/docs/{key}/");
 
     let text = ok(&d, &["show", &id]);
     assert!(text.ends_with(&format!("Documents: {docs_dir} (none)\n")));
@@ -328,25 +328,25 @@ fn show_documents_directory_and_files() {
     assert_eq!(json["docs_dir"], docs_dir);
     assert_eq!(json["docs"], json!([]));
 
-    fs::create_dir_all(d.join(format!(".billet/docs/{key}/review"))).unwrap();
-    fs::write(d.join(format!(".billet/docs/{key}/z.md")), "secret").unwrap();
-    fs::write(d.join(format!(".billet/docs/{key}/review/r1.md")), "report").unwrap();
+    fs::create_dir_all(d.join(format!(".blt/docs/{key}/review"))).unwrap();
+    fs::write(d.join(format!(".blt/docs/{key}/z.md")), "secret").unwrap();
+    fs::write(d.join(format!(".blt/docs/{key}/review/r1.md")), "report").unwrap();
     let text = ok(&d, &["show", &id]);
     assert!(text.ends_with(&format!(
-        "Documents: {docs_dir}\n  .billet/docs/{key}/review/r1.md\n  .billet/docs/{key}/z.md\n"
+        "Documents: {docs_dir}\n  .blt/docs/{key}/review/r1.md\n  .blt/docs/{key}/z.md\n"
     )));
     let json: Value = serde_json::from_str(&ok(&d, &["show", &id, "--json"])).unwrap();
     assert_eq!(
         json["docs"],
         json!([
-            format!(".billet/docs/{key}/review/r1.md"),
-            format!(".billet/docs/{key}/z.md")
+            format!(".blt/docs/{key}/review/r1.md"),
+            format!(".blt/docs/{key}/z.md")
         ])
     );
     ok(&d, &["close", &id, "--reason", "done"]);
-    assert!(d.join(format!(".billet/docs/{key}/z.md")).is_file());
+    assert!(d.join(format!(".blt/docs/{key}/z.md")).is_file());
     ok(&d, &["reopen", &id, "--reason", "continue"]);
-    assert!(d.join(format!(".billet/docs/{key}/review/r1.md")).is_file());
+    assert!(d.join(format!(".blt/docs/{key}/review/r1.md")).is_file());
 }
 
 #[test]
@@ -416,10 +416,9 @@ fn add_dep_many_preserves_order() {
     .trim()
     .to_string();
     let key = key_of(&d, &id);
-    let i = billet::issue::decode(
-        &fs::read_to_string(d.join(format!(".billet/open/{key}.md"))).unwrap(),
-    )
-    .unwrap();
+    let i =
+        billet::issue::decode(&fs::read_to_string(d.join(format!(".blt/open/{key}.md"))).unwrap())
+            .unwrap();
     assert_eq!(
         i.depends_on,
         vec![key_of(&d, &a), key_of(&d, &b), key_of(&d, &c)]
@@ -441,7 +440,7 @@ fn symlink_registry_and_dirs_refuse() {
     add(&real, "target");
     let linked = d.join("linked");
     fs::create_dir(&linked).unwrap();
-    std::os::unix::fs::symlink(real.join(".billet"), linked.join(".billet")).unwrap();
+    std::os::unix::fs::symlink(real.join(".blt"), linked.join(".blt")).unwrap();
     let e = bad(&linked, &["ready"]);
     assert!(e.contains("symbolic link"), "{e}");
     let e = bad(&linked, &["add", "x"]);
@@ -449,17 +448,17 @@ fn symlink_registry_and_dirs_refuse() {
     let e = bad(&linked, &["init"]);
     assert!(e.contains("symbolic link"), "{e}");
     assert_eq!(
-        fs::read_dir(real.join(".billet/open")).unwrap().count(),
+        fs::read_dir(real.join(".blt/open")).unwrap().count(),
         1,
         "linked registry untouched"
     );
 
     let d2 = dir("linkopen");
     ok(&d2, &["init"]);
-    fs::remove_dir(d2.join(".billet/open")).unwrap();
+    fs::remove_dir(d2.join(".blt/open")).unwrap();
     let victim = d2.join("victim");
     fs::create_dir(&victim).unwrap();
-    std::os::unix::fs::symlink(&victim, d2.join(".billet/open")).unwrap();
+    std::os::unix::fs::symlink(&victim, d2.join(".blt/open")).unwrap();
     let e = bad(&d2, &["ready"]);
     assert!(e.contains("symbolic link"), "{e}");
     let e = bad(&d2, &["add", "x"]);
@@ -477,8 +476,8 @@ fn permissions_preserved_on_rewrite() {
     ok(&d, &["init"]);
     let id = add(&d, "p");
     let key = key_of(&d, &id);
-    let open = d.join(format!(".billet/open/{key}.md"));
-    let closed = d.join(format!(".billet/closed/{key}.md"));
+    let open = d.join(format!(".blt/open/{key}.md"));
+    let closed = d.join(format!(".blt/closed/{key}.md"));
     let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
     fs::set_permissions(&open, fs::Permissions::from_mode(0o600)).unwrap();
     ok(&d, &["update", &id, "--title", "p2"]);
@@ -535,11 +534,11 @@ fn init_installs_agent_integrations_idempotently() {
     let sentinel = "model = \"keepme\"\n";
     fs::write(proj.join(".codex/config.toml"), sentinel).unwrap();
 
-    assert_eq!(ok(&proj, &["init"]), "initialized .billet/\n");
+    assert_eq!(ok(&proj, &["init"]), "initialized .blt/\n");
     let agents = fs::read_to_string(proj.join("AGENTS.md")).unwrap();
     assert!(agents.starts_with(agents_orig), "original bytes preserved");
-    assert_eq!(agents.matches("<!-- BEGIN BILLET v:1 hash:").count(), 1);
-    assert_eq!(agents.matches("<!-- END BILLET -->").count(), 1);
+    assert_eq!(agents.matches("<!-- BEGIN BLT v:1 hash:").count(), 1);
+    assert_eq!(agents.matches("<!-- END BLT -->").count(), 1);
     assert!(agents.contains("blt claim ID") && agents.contains("blt recall"));
 
     let claude: Value =
@@ -665,16 +664,16 @@ fn session_start_hook_payload_is_static_and_read_only() {
         "hook payload must carry only the static workflow"
     );
 
-    let journal = "BILLET-MOVE-1\n18446744073709551615\n2\nxy";
-    fs::write(d.join(".billet/.move"), journal).unwrap();
+    let journal = "BLT-MOVE-1\n18446744073709551615\n2\nxy";
+    fs::write(d.join(".blt/.move"), journal).unwrap();
     let out2 = ok(&nested, &["start", "--hook-json"]);
     assert!(out2.contains("SessionStart"));
     assert_eq!(
-        fs::read_to_string(d.join(".billet/.move")).unwrap(),
+        fs::read_to_string(d.join(".blt/.move")).unwrap(),
         journal,
         "hook must not recover or mutate the journal"
     );
-    fs::remove_file(d.join(".billet/.move")).unwrap();
+    fs::remove_file(d.join(".blt/.move")).unwrap();
 
     let e = bad(&d, &["start", "--json", "--hook-json"]);
     assert!(e.contains("mutually exclusive"), "{e}");
@@ -698,7 +697,7 @@ fn list_sort_by_creation_date() {
             .replace(&format!("T {key}"), &format!("T {id}"))
             .replace("priority: 2", &format!("priority: {pri}"))
             .replace("created_at: null", &format!("created_at: {created}"));
-        fs::write(d.join(format!(".billet/{place}/{key}.md")), text).unwrap();
+        fs::write(d.join(format!(".blt/{place}/{key}.md")), text).unwrap();
     };
     seed("B100", "open", "3", "\"2026-04-03\"");
     seed("B101", "open", "1", "\"2026-04-12T06:30:00Z\"");
@@ -797,7 +796,7 @@ fn tree_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
 }
 
 fn seed_bare_registry(d: &Path) -> PathBuf {
-    let billet = d.join(".billet");
+    let billet = d.join(".blt");
     fs::create_dir_all(billet.join("open")).unwrap();
     fs::create_dir_all(billet.join("closed")).unwrap();
     fs::write(billet.join("memory.md"), "# Project Memory\n").unwrap();
@@ -816,7 +815,7 @@ fn tmp_ignore_rule_covers_nested_files() {
         .unwrap();
     assert!(init.status.success(), "git init must succeed for this test");
     fs::write(billet.join("open/.10000a.md.tmp-42-1"), "x").unwrap();
-    let tmp = ".billet/open/.10000a.md.tmp-42-1";
+    let tmp = ".blt/open/.10000a.md.tmp-42-1";
     let ignored = || {
         Command::new("git")
             .args(["check-ignore", "--no-index", tmp])
@@ -846,17 +845,13 @@ fn read_only_registry_reads_without_lock() {
     ok(&d, &["init", "--no-hooks"]);
     let id = add(&d, "ro work");
     ok(&d, &["remember", "topic", "value"]);
-    fs::remove_file(d.join(".billet/.lock")).unwrap();
+    fs::remove_file(d.join(".blt/.lock")).unwrap();
     let xdg = d.join("xdg");
     fs::create_dir_all(&xdg).unwrap();
     fs::set_permissions(&xdg, fs::Permissions::from_mode(0o777)).unwrap();
 
-    let locked: Vec<PathBuf> = [
-        d.join(".billet"),
-        d.join(".billet/open"),
-        d.join(".billet/closed"),
-    ]
-    .to_vec();
+    let locked: Vec<PathBuf> =
+        [d.join(".blt"), d.join(".blt/open"), d.join(".blt/closed")].to_vec();
     struct Restore(Vec<PathBuf>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -887,17 +882,17 @@ fn read_only_registry_reads_without_lock() {
         );
     }
     assert!(
-        !d.join(".billet/.lock").exists(),
+        !d.join(".blt/.lock").exists(),
         "read commands must not create .lock"
     );
 
     let probe = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(d.join(".billet/.probe"));
+        .open(d.join(".blt/.probe"));
     let as_root = probe.is_ok();
     if as_root {
-        fs::remove_file(d.join(".billet/.probe")).unwrap();
+        fs::remove_file(d.join(".blt/.probe")).unwrap();
     }
     let blt_cmd = |args: &[&str]| {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blt"));
@@ -918,14 +913,14 @@ fn read_only_registry_reads_without_lock() {
         "write succeeded in a read-only registry"
     );
     assert!(!o.stderr.is_empty());
-    assert_eq!(fs::read_dir(d.join(".billet/open")).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(d.join(".blt/open")).unwrap().count(), 1);
     drop(restore);
 
     let old = fm("10ff03", "open", "");
     let new = fm("10ff03", "closed", "");
-    fs::write(d.join(".billet/open/10ff03.md"), &old).unwrap();
-    fs::write(d.join(".billet/.move"), journal(&old, &new)).unwrap();
-    fs::File::create(d.join(".billet/.lock")).unwrap();
+    fs::write(d.join(".blt/open/10ff03.md"), &old).unwrap();
+    fs::write(d.join(".blt/.move"), journal(&old, &new)).unwrap();
+    fs::File::create(d.join(".blt/.lock")).unwrap();
     let _relock = Restore(locked.clone());
     for p in &locked {
         fs::set_permissions(p, fs::Permissions::from_mode(0o555)).unwrap();
@@ -937,69 +932,66 @@ fn read_only_registry_reads_without_lock() {
     );
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(e.contains("blt check") || e.contains(".move"), "{e}");
-    assert!(d.join(".billet/.move").exists(), "journal must remain");
-    assert!(d.join(".billet/open/10ff03.md").exists());
+    assert!(d.join(".blt/.move").exists(), "journal must remain");
+    assert!(d.join(".blt/open/10ff03.md").exists());
 }
 
 #[test]
 fn init_repairs_missing_components() {
     let d = dir("initfix");
     ok(&d, &["init", "--no-hooks"]);
-    fs::remove_dir_all(d.join(".billet/closed")).unwrap();
-    fs::remove_file(d.join(".billet/memory.md")).unwrap();
-    fs::write(d.join(".billet/.gitignore"), "custom-only\n").unwrap();
-    assert_eq!(ok(&d, &["init", "--no-hooks"]), "initialized .billet/\n");
-    assert!(d.join(".billet/closed").is_dir());
+    fs::remove_dir_all(d.join(".blt/closed")).unwrap();
+    fs::remove_file(d.join(".blt/memory.md")).unwrap();
+    fs::write(d.join(".blt/.gitignore"), "custom-only\n").unwrap();
+    assert_eq!(ok(&d, &["init", "--no-hooks"]), "initialized .blt/\n");
+    assert!(d.join(".blt/closed").is_dir());
     assert_eq!(
-        fs::read_to_string(d.join(".billet/memory.md")).unwrap(),
+        fs::read_to_string(d.join(".blt/memory.md")).unwrap(),
         "# Project Memory\n",
         "repair writes fresh memory.md"
     );
     assert_eq!(
-        fs::read_to_string(d.join(".billet/.gitignore")).unwrap(),
+        fs::read_to_string(d.join(".blt/.gitignore")).unwrap(),
         "custom-only\n",
         "existing .gitignore bytes preserved"
     );
     fs::write(
-        d.join(".billet/memory.md"),
+        d.join(".blt/memory.md"),
         "# Project Memory\n\n## kept\n> v\n",
     )
     .unwrap();
     assert_eq!(
         ok(&d, &["init", "--no-hooks"]),
-        ".billet/ already initialized\n"
+        ".blt/ already initialized\n"
     );
     assert_eq!(
-        fs::read_to_string(d.join(".billet/memory.md")).unwrap(),
+        fs::read_to_string(d.join(".blt/memory.md")).unwrap(),
         "# Project Memory\n\n## kept\n> v\n"
     );
     let _id = add(&d, "post repair");
 
     #[cfg(unix)]
     {
-        fs::remove_dir_all(d.join(".billet/open")).unwrap();
-        std::os::unix::fs::symlink("closed", d.join(".billet/open")).unwrap();
+        fs::remove_dir_all(d.join(".blt/open")).unwrap();
+        std::os::unix::fs::symlink("closed", d.join(".blt/open")).unwrap();
         let e = bad(&d, &["init", "--no-hooks"]);
         assert!(e.contains("open"), "{e}");
-        fs::remove_file(d.join(".billet/open")).unwrap();
-        fs::create_dir(d.join(".billet/open")).unwrap();
+        fs::remove_file(d.join(".blt/open")).unwrap();
+        fs::create_dir(d.join(".blt/open")).unwrap();
     }
 
     let outer = dir("initouter");
     ok(&outer, &["init", "--no-hooks"]);
     let inner = outer.join("inner");
-    fs::create_dir_all(inner.join(".billet/open")).unwrap();
+    fs::create_dir_all(inner.join(".blt/open")).unwrap();
     let e = bad(&inner, &["list"]);
     assert!(
         e.contains("blt init"),
         "partial registry must point at init, not the ancestor: {e}"
     );
-    assert_eq!(
-        ok(&inner, &["init", "--no-hooks"]),
-        "initialized .billet/\n"
-    );
-    assert!(inner.join(".billet/closed").is_dir());
-    assert!(inner.join(".billet/memory.md").is_file());
+    assert_eq!(ok(&inner, &["init", "--no-hooks"]), "initialized .blt/\n");
+    assert!(inner.join(".blt/closed").is_dir());
+    assert!(inner.join(".blt/memory.md").is_file());
     assert_eq!(ok(&inner, &["list", "--json"]).trim(), "[]");
 }
 
@@ -1048,11 +1040,11 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
     let base = dir("agcanon");
     ok(&base, &["init", "--no-hooks"]);
     let written = fs::read_to_string(base.join("AGENTS.md")).unwrap();
-    let start = written.find("<!-- BEGIN BILLET v:1 hash:").unwrap();
-    let stop = written.find("<!-- END BILLET -->").unwrap() + "<!-- END BILLET -->".len();
+    let start = written.find("<!-- BEGIN BLT v:1 hash:").unwrap();
+    let stop = written.find("<!-- END BLT -->").unwrap() + "<!-- END BLT -->".len();
     let canonical = written[start..stop].to_string();
-    let body = &canonical
-        [canonical.find('\n').unwrap() + 1..canonical.rfind("<!-- END BILLET -->").unwrap()];
+    let body =
+        &canonical[canonical.find('\n').unwrap() + 1..canonical.rfind("<!-- END BLT -->").unwrap()];
     assert!(
         canonical.contains(&format!("hash:{:016x}", fnv1a(body))),
         "fresh block hash must cover the normalized body: {canonical}"
@@ -1071,11 +1063,11 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         };
         let check_unchanged = |d: &Path, code: i32| -> String {
             let agents = fs::read(d.join("AGENTS.md")).unwrap();
-            let tree = tree_bytes(&d.join(".billet"));
+            let tree = tree_bytes(&d.join(".blt"));
             let o = run(d, &["check"]);
             assert_eq!(o.status.code(), Some(code));
             assert_eq!(fs::read(d.join("AGENTS.md")).unwrap(), agents);
-            assert_eq!(tree_bytes(&d.join(".billet")), tree);
+            assert_eq!(tree_bytes(&d.join(".blt")), tree);
             String::from_utf8(o.stdout).unwrap()
         };
 
@@ -1090,7 +1082,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let old = fs::read_to_string(d.join("AGENTS.md")).unwrap();
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".billet/ already initialized\n"
+            ".blt/ already initialized\n"
         );
         let new = fs::read_to_string(d.join("AGENTS.md")).unwrap();
         assert_eq!(new, format!("{old}{nl}{canon}{nl}"), "append: {new}");
@@ -1102,18 +1094,18 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         assert!(out.contains("clean"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".billet/ already initialized\n"
+            ".blt/ already initialized\n"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // older intact: check reports outdated, init upgrades surgically
-        let older = canon.replace("<!-- BEGIN BILLET v:1 ", "<!-- BEGIN BILLET v:0 ");
+        let older = canon.replace("<!-- BEGIN BLT v:1 ", "<!-- BEGIN BLT v:0 ");
         let d = fixture("ag-old", format!("{pre}{older}"));
         let out = check_unchanged(&d, 1);
         assert!(out.contains("Billet instructions are outdated"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".billet/ already initialized\n"
+            ".blt/ already initialized\n"
         );
         assert_eq!(
             fs::read_to_string(d.join("AGENTS.md")).unwrap(),
@@ -1125,7 +1117,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let before = fs::read(d.join("AGENTS.md")).unwrap();
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".billet/ already initialized\n"
+            ".blt/ already initialized\n"
         );
         assert_eq!(
             fs::read(d.join("AGENTS.md")).unwrap(),
@@ -1136,7 +1128,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         // older intact with genuinely different body but its own valid hash
         let old_body = format!("## Issue tracking with Billet{nl}{nl}old rules{nl}");
         let older2 = format!(
-            "<!-- BEGIN BILLET v:0 hash:{:016x} -->{nl}{old_body}<!-- END BILLET -->",
+            "<!-- BEGIN BLT v:0 hash:{:016x} -->{nl}{old_body}<!-- END BLT -->",
             fnv1a(&old_body)
         );
         let d = fixture("ag-old2", format!("{pre}{older2}{post}"));
@@ -1145,7 +1137,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         assert!(!out.contains("customized"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".billet/ already initialized\n"
+            ".blt/ already initialized\n"
         );
         assert_eq!(
             fs::read_to_string(d.join("AGENTS.md")).unwrap(),
@@ -1154,8 +1146,8 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
 
         // current customized: not a problem, init reports and leaves bytes
         let custom = canon.replace(
-            "<!-- END BILLET -->",
-            &format!("- our local rule{nl}<!-- END BILLET -->"),
+            "<!-- END BLT -->",
+            &format!("- our local rule{nl}<!-- END BLT -->"),
         );
         let file = format!("{pre}{custom}{post}");
         let d = fixture("ag-ccu", file.clone());
@@ -1163,14 +1155,14 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         assert!(out.contains("clean"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".billet/ already initialized\nAGENTS.md: Billet instructions are customized; left unchanged\n"
+            ".blt/ already initialized\nAGENTS.md: Billet instructions are customized; left unchanged\n"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // older customized: check reports it, init leaves bytes and reports
         let custom_old = older.replace(
-            "<!-- END BILLET -->",
-            &format!("- our local rule{nl}<!-- END BILLET -->"),
+            "<!-- END BLT -->",
+            &format!("- our local rule{nl}<!-- END BLT -->"),
         );
         let file = format!("{pre}{custom_old}{post}");
         let d = fixture("ag-ocu", file.clone());
@@ -1182,14 +1174,14 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         assert!(report.contains("reapply"), "{report}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            format!(".billet/ already initialized\n{report}"),
+            format!(".blt/ already initialized\n{report}"),
             "init must repeat the check report for NeedsAttention"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // newer version (intact and customized): same unsupported report
         for (name, seed) in [("ag-new", &canon), ("ag-newc", &custom)] {
-            let newer = seed.replace("<!-- BEGIN BILLET v:1 ", "<!-- BEGIN BILLET v:2 ");
+            let newer = seed.replace("<!-- BEGIN BLT v:1 ", "<!-- BEGIN BLT v:2 ");
             let file = format!("{pre}{newer}{post}");
             let d = fixture(name, file.clone());
             let report = check_unchanged(&d, 1);
@@ -1199,7 +1191,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
             );
             assert_eq!(
                 ok(&d, &["init", "--no-hooks"]),
-                format!(".billet/ already initialized\n{report}"),
+                format!(".blt/ already initialized\n{report}"),
                 "{name}: init never downgrades"
             );
             assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
@@ -1209,7 +1201,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         for (name, file) in [
             (
                 "ag-mal",
-                format!("{pre}<!-- BEGIN BILLET v:1 -->{nl}body{nl}<!-- END BILLET -->{nl}"),
+                format!("{pre}<!-- BEGIN BLT v:1 -->{nl}body{nl}<!-- END BLT -->{nl}"),
             ),
             ("ag-dup", format!("{pre}{canon}{nl}{canon}{nl}")),
             ("ag-ind", format!("{pre}  {canon}{nl}")),
@@ -1238,7 +1230,7 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
     let d = dir("agentrules");
     ok(&d, &["init", "--no-hooks"]);
     let agents = fs::read_to_string(d.join("AGENTS.md")).unwrap();
-    let block = &agents[agents.find("<!-- BEGIN BILLET").unwrap()..];
+    let block = &agents[agents.find("<!-- BEGIN BLT").unwrap()..];
     let text = ok(&d, &["start"]);
     let json: Value = serde_json::from_str(&ok(&d, &["start", "--json"])).unwrap();
     let hook: Value = serde_json::from_str(&ok(&d, &["start", "--hook-json"])).unwrap();
@@ -1280,7 +1272,7 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
     ];
     for hay in [
         workflow,
-        block.strip_prefix("<!-- BEGIN BILLET").unwrap_or(block),
+        block.strip_prefix("<!-- BEGIN BLT").unwrap_or(block),
     ] {
         let mut at = 0;
         for token in tokens.iter().skip(if hay.starts_with("Billet workflow") {
@@ -1315,7 +1307,7 @@ fn file_key(d: &Path, id: &str) -> String {
 }
 
 fn set_priority_null(d: &Path, id: &str) {
-    let path = d.join(format!(".billet/open/{}.md", file_key(d, id)));
+    let path = d.join(format!(".blt/open/{}.md", file_key(d, id)));
     let text = fs::read_to_string(&path).unwrap();
     fs::write(&path, text.replace("priority: 2", "priority: null")).unwrap();
 }
@@ -1392,7 +1384,7 @@ fn mcp_initialize_protocol() {
     );
     let result = &response[0]["result"];
     assert_eq!(result["protocolVersion"], "2025-06-18");
-    assert_eq!(result["serverInfo"]["name"], "billet");
+    assert_eq!(result["serverInfo"]["name"], "blt");
     assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(result["capabilities"], json!({"tools":{}}));
     let start = ok(&d, &["start"]);
@@ -1671,7 +1663,7 @@ fn normalize(text: &str, ids: &[(String, String)]) -> String {
 }
 
 fn issue_ids(root: &Path) -> Vec<String> {
-    let mut ids: Vec<String> = tree_bytes(&root.join(".billet"))
+    let mut ids: Vec<String> = tree_bytes(&root.join(".blt"))
         .into_iter()
         .filter_map(|(path, _)| {
             let name = Path::new(&path).file_name()?.to_str()?.to_string();
@@ -1746,7 +1738,7 @@ fn mcp_parity_without_registry(d: &Path) {
             "{tool} without a registry: files"
         );
     }
-    assert!(empty_mcp.join(".billet").is_dir() && empty_mcp.join("AGENTS.md").is_file());
+    assert!(empty_mcp.join(".blt").is_dir() && empty_mcp.join("AGENTS.md").is_file());
 }
 
 #[test]
@@ -1761,7 +1753,7 @@ fn mcp_cli_parity_all_tools() {
         .trim()
         .to_string();
     let dangling = fm("3deadb", "open", "").replace("depends_on: []", "depends_on: [\"2dead1\"]");
-    fs::write(base.join(".billet/open/3deadb.md"), dangling).unwrap();
+    fs::write(base.join(".blt/open/3deadb.md"), dangling).unwrap();
     let via_mcp = d.join("mcp");
     let via_cli = d.join("cli");
     copy_tree(&base, &via_mcp);
@@ -2091,7 +2083,7 @@ const HELP: &str = concat!(
     "  remember TOPIC TEXT             record a project fact\n",
     "  recall [TOPIC]                  read project facts\n\n",
     "Setup\n",
-    "  init [--no-hooks] [--prefix P]  create .billet/, AGENTS.md and project hooks\n",
+    "  init [--no-hooks] [--prefix P]  create .blt/, AGENTS.md and project hooks\n",
     "  start                           workflow summary for agents\n",
     "  check                           report registry problems\n",
     "  mcp                             MCP server over stdio (started by the client)\n\n",
@@ -2329,7 +2321,7 @@ fn check_text_field(s: &Seeded, index: usize, field: &TextField) -> Option<Strin
             return Some(format!("{}.{}", field.command, field.name));
         };
         let d = s.fresh(index * 100 + case);
-        let before = tree_bytes(&d.join(".billet"));
+        let before = tree_bytes(&d.join(".blt"));
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
         let o = run(&d, &args);
         if field.kind == billet::text::TextKind::Body && value != "-" {
@@ -2376,9 +2368,9 @@ fn check_text_field(s: &Seeded, index: usize, field: &TextField) -> Option<Strin
             );
             assert_eq!(stderr, format!("blt: {message}\n"), "{label}");
             assert_eq!(
-                tree_bytes(&d.join(".billet")),
+                tree_bytes(&d.join(".blt")),
                 before,
-                "{label} refused write changed .billet"
+                "{label} refused write changed .blt"
             );
         }
         fs::remove_dir_all(&d).unwrap();
@@ -2457,8 +2449,8 @@ fn every_text_argument_by_kind() {
     );
     add(&fresh, "first");
     assert!(
-        fresh.join("xdg/billet/install-id").is_file(),
-        "the install salt lives under XDG_STATE_HOME/billet"
+        fresh.join("xdg/blt/install-id").is_file(),
+        "the install salt lives under XDG_STATE_HOME/blt"
     );
 
     let s = seeded("textkinds");
@@ -2683,12 +2675,12 @@ fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
         let d = root.join(format!("a{index}-{}", from.as_str()));
         copy_tree(&root.join("base"), &d);
         let seed = lifecycle_seed(from);
-        let path = d.join(format!(".billet/{}/{LIFECYCLE_ID}.md", place_of(from)));
+        let path = d.join(format!(".blt/{}/{LIFECYCLE_ID}.md", place_of(from)));
         fs::write(&path, billet::issue::encode(&seed).unwrap()).unwrap();
         let mut args = vec![argv[0], LIFECYCLE_ID];
         args.extend(&argv[1..]);
         let label = format!("{} from {}", argv.join(" "), from.as_str());
-        let before = tree_bytes(&d.join(".billet"));
+        let before = tree_bytes(&d.join(".blt"));
         let o = run(&d, &args);
         let stdout = String::from_utf8_lossy(&o.stdout).replace(&h(LIFECYCLE_ID), "ID");
         let stderr = String::from_utf8_lossy(&o.stderr).to_string();
@@ -2697,9 +2689,9 @@ fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
                 assert_eq!(o.status.code(), Some(1), "{label}: {stderr}");
                 assert_eq!(stderr, format!("blt: {message}\n"), "{label}");
                 assert_eq!(
-                    tree_bytes(&d.join(".billet")),
+                    tree_bytes(&d.join(".blt")),
                     before,
-                    "{label} refusal changed .billet"
+                    "{label} refusal changed .blt"
                 );
             }
             Ok(t) => {
@@ -2711,7 +2703,7 @@ fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
                     && argv.contains(&"1.0")
                 {
                     assert_eq!(
-                        tree_bytes(&d.join(".billet")),
+                        tree_bytes(&d.join(".blt")),
                         before,
                         "{label} same release is a no-op"
                     );
@@ -2727,7 +2719,7 @@ fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
                     expected.notes.push_str("\n- <stamp> qa: n");
                 }
                 let after = d.join(format!(
-                    ".billet/{}/{LIFECYCLE_ID}.md",
+                    ".blt/{}/{LIFECYCLE_ID}.md",
                     place_of(expected.status)
                 ));
                 if place_of(expected.status) != place_of(from) {
@@ -2844,7 +2836,7 @@ fn lifecycle_lists_and_release(d: &Path) {
     ok(d, &["init", "--no-hooks"]);
     let proposed = ok(d, &["add", "proposed"]).trim().to_string();
     let file =
-        fs::read_to_string(d.join(format!(".billet/open/{}.md", key_of(d, &proposed)))).unwrap();
+        fs::read_to_string(d.join(format!(".blt/open/{}.md", key_of(d, &proposed)))).unwrap();
     assert!(
         file.lines().any(|l| l == "priority: 2"),
         "add without -p stores 2: {file}"
@@ -2904,12 +2896,12 @@ fn lifecycle_lists_and_release(d: &Path) {
     let unreadable = add(d, "unreadable");
     ok(d, &["close", &unreadable, "--reason", "done"]);
     let unreadable = key_of(d, &unreadable);
-    let unreadable_path = d.join(format!(".billet/closed/{unreadable}.md"));
+    let unreadable_path = d.join(format!(".blt/closed/{unreadable}.md"));
     fs::write(&unreadable_path, "not an issue file").unwrap();
     let inconsistent = add(d, "inconsistent");
     ok(d, &["close", &inconsistent, "--reason", "done"]);
     let inconsistent = key_of(d, &inconsistent);
-    let inconsistent_path = d.join(format!(".billet/closed/{inconsistent}.md"));
+    let inconsistent_path = d.join(format!(".blt/closed/{inconsistent}.md"));
     let text = fs::read_to_string(&inconsistent_path)
         .unwrap()
         .replace("priority: 2", "priority: 9");
@@ -2935,7 +2927,7 @@ fn lifecycle_lists_and_release(d: &Path) {
     let warnings = String::from_utf8_lossy(&sealed.stderr);
     for id in [&unreadable, &inconsistent] {
         assert_eq!(
-            warnings.matches(&format!(".billet/closed/{id}.md")).count(),
+            warnings.matches(&format!(".blt/closed/{id}.md")).count(),
             1,
             "{warnings}"
         );
@@ -3029,7 +3021,7 @@ fn seed_file(d: &Path, id: &str, status: &str, edit: impl Fn(String) -> String) 
             .replace("assignee: null", "assignee: \"bot\"")
             .replace("claim_id: null", "claim_id: \"c1\"");
     }
-    fs::write(d.join(format!(".billet/open/{id}.md")), edit(text)).unwrap();
+    fs::write(d.join(format!(".blt/open/{id}.md")), edit(text)).unwrap();
 }
 
 fn readiness_rows_status(d: &Path) -> Vec<Row> {
@@ -3279,7 +3271,7 @@ fn readiness_rows_unresolved(d: &Path) -> Vec<Row> {
     rows.push(unresolved(
         "unusable blocker",
         &behind,
-        format!("blocker {bad_blocker} (unusable .billet/open/{bad_blocker}.md)"),
+        format!("blocker {bad_blocker} (unusable .blt/open/{bad_blocker}.md)"),
         &[],
         &[],
         "",
@@ -3290,18 +3282,18 @@ fn readiness_rows_unresolved(d: &Path) -> Vec<Row> {
     rows.push(unresolved(
         "subtask with an invalid field",
         &host,
-        format!("subtask .billet/open/{invalid}.md (unusable)"),
+        format!("subtask .blt/open/{invalid}.md (unusable)"),
         &[],
         &[],
         "",
     ));
     let host = add(d, "parent of unparseable subtask");
     let broken = key_of(d, &child(d, &host, "child", true));
-    fs::write(d.join(format!(".billet/open/{broken}.md")), "not parseable").unwrap();
+    fs::write(d.join(format!(".blt/open/{broken}.md")), "not parseable").unwrap();
     rows.push(unresolved(
         "unparseable subtask",
         &host,
-        format!("subtask .billet/open/{broken}.md (unusable)"),
+        format!("subtask .blt/open/{broken}.md (unusable)"),
         &[],
         &[],
         "",
@@ -3309,11 +3301,11 @@ fn readiness_rows_unresolved(d: &Path) -> Vec<Row> {
     let host = add(d, "grandparent of unparseable");
     let middle = child(d, &host, "child", true);
     let leaf = key_of(d, &child(d, &middle, "grandchild", true));
-    fs::write(d.join(format!(".billet/open/{leaf}.md")), "not parseable").unwrap();
+    fs::write(d.join(format!(".blt/open/{leaf}.md")), "not parseable").unwrap();
     rows.push(unresolved(
         "unparseable grandchild",
         &host,
-        format!("subtask .billet/open/{leaf}.md (unusable)"),
+        format!("subtask .blt/open/{leaf}.md (unusable)"),
         &[],
         &[&middle],
         &format!("; waiting for subtasks {middle}"),
@@ -3481,18 +3473,14 @@ fn dependency_edits(d: &Path) {
     ok(d, &["init", "--no-hooks"]);
     let [a, b, c, x, y] = ["a", "b", "c", "x", "y"].map(|t| add(d, t));
     let refuse = |args: &[&str], message: String| {
-        let before = tree_bytes(&d.join(".billet"));
+        let before = tree_bytes(&d.join(".blt"));
         let o = run(d, args);
         assert_eq!(
             String::from_utf8_lossy(&o.stderr),
             format!("blt: {message}\n"),
             "{args:?}"
         );
-        assert_eq!(
-            tree_bytes(&d.join(".billet")),
-            before,
-            "{args:?} changed .billet"
-        );
+        assert_eq!(tree_bytes(&d.join(".blt")), before, "{args:?} changed .blt");
     };
     assert_eq!(
         ok(d, &["dep", "add", &a, &b]),
@@ -3533,7 +3521,7 @@ fn dependency_edits(d: &Path) {
     ok(d, &["dep", "add", &a, &y]);
     let y_key = key_of(d, &y);
     fs::rename(
-        d.join(format!(".billet/open/{y_key}.md")),
+        d.join(format!(".blt/open/{y_key}.md")),
         d.join("outside.md"),
     )
     .unwrap();
@@ -3569,7 +3557,7 @@ fn dmg_text(id: &str, status: &str, parent: Option<&str>) -> String {
 }
 
 fn dmg_path(id: &str) -> String {
-    format!(".billet/open/{id}.md")
+    format!(".blt/open/{id}.md")
 }
 
 #[derive(Clone)]
@@ -3648,18 +3636,18 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
     Ok(match kind {
         K::IssueDirectory => vec![damage(
             "closed directory is a file",
-            ".billet/closed",
+            ".blt/closed",
             "must be a real directory (not a symbolic link)",
             "restore a real directory at this path",
             Reaction::Refused,
             move |d: &Path| {
-                fs::remove_dir_all(d.join(".billet/closed")).unwrap();
-                fs::write(d.join(".billet/closed"), "x").unwrap();
+                fs::remove_dir_all(d.join(".blt/closed")).unwrap();
+                fs::write(d.join(".blt/closed"), "x").unwrap();
             },
         )],
         K::IssueDirectoryUnlistable => vec![chmod_dir(
             "closed directory unreadable",
-            ".billet/closed",
+            ".blt/closed",
             0o000,
         )],
         K::IssueEntryUnlistable => {
@@ -3667,27 +3655,27 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         }
         K::IssueNameNotUtf8 => vec![damage(
             "issue file name is not UTF-8",
-            ".billet/open/\u{fffd}",
+            ".blt/open/\u{fffd}",
             "unexpected file with a non-UTF-8 name",
             "remove or rename the file",
             Reaction::Unaffected,
-            move |d: &Path| write_non_utf8(&d.join(".billet/open")),
+            move |d: &Path| write_non_utf8(&d.join(".blt/open")),
         )],
         K::TemporaryFile => vec![damage(
             "abandoned temporary file",
-            ".billet/open/.10000a.md.tmp-42-1",
+            ".blt/open/.10000a.md.tmp-42-1",
             "abandoned temporary file",
             "remove it after checking no blt process is running",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".billet/open/.10000a.md.tmp-42-1"), "x").unwrap(),
+            move |d: &Path| fs::write(d.join(".blt/open/.10000a.md.tmp-42-1"), "x").unwrap(),
         )],
         K::UnexpectedFile => vec![damage(
             "unexpected file",
-            ".billet/open/notes.txt",
+            ".blt/open/notes.txt",
             "unexpected file in an issue directory",
             "remove or rename the file",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".billet/open/notes.txt"), "x").unwrap(),
+            move |d: &Path| fs::write(d.join(".blt/open/notes.txt"), "x").unwrap(),
         )],
         K::IssueUnreadable => {
             let mut list = vec![
@@ -3807,11 +3795,11 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
                 &victim,
                 format!("duplicate issue key {v}"),
                 "keep one record for this issue and remove the others",
-                Reaction::Skipped(vec![dmg_path(v), format!(".billet/closed/{v}.md")]),
+                Reaction::Skipped(vec![dmg_path(v), format!(".blt/closed/{v}.md")]),
                 move |d: &Path| {
                     let text = fs::read_to_string(d.join(dmg_path(v))).unwrap();
                     fs::write(
-                        d.join(format!(".billet/closed/{v}.md")),
+                        d.join(format!(".blt/closed/{v}.md")),
                         text.replace("status: open", "status: closed"),
                     )
                     .unwrap();
@@ -3827,7 +3815,7 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
                     let text = fm(DMG_DOUBLE, "open", "");
                     fs::write(d.join(dmg_path(DMG_DOUBLE)), &text).unwrap();
                     fs::write(
-                        d.join(format!(".billet/closed/{DMG_DOUBLE}.md")),
+                        d.join(format!(".blt/closed/{DMG_DOUBLE}.md")),
                         text.replace("status: open", "status: closed"),
                     )
                     .unwrap();
@@ -3846,16 +3834,12 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         )],
         K::WrongDirectory => vec![damage(
             "open issue in closed/",
-            format!(".billet/closed/{v}.md"),
+            format!(".blt/closed/{v}.md"),
             "status open does not belong in closed/",
             "move the file to the other directory or fix the status field",
-            Reaction::Skipped(vec![format!(".billet/closed/{v}.md")]),
+            Reaction::Skipped(vec![format!(".blt/closed/{v}.md")]),
             move |d: &Path| {
-                fs::rename(
-                    d.join(dmg_path(v)),
-                    d.join(format!(".billet/closed/{v}.md")),
-                )
-                .unwrap()
+                fs::rename(d.join(dmg_path(v)), d.join(format!(".blt/closed/{v}.md"))).unwrap()
             },
         )],
         K::FieldConflict => vec![
@@ -3935,7 +3919,7 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         K::UnresolvedReference => vec![damage(
             "unusable subtask",
             &victim,
-            format!("unresolved subtask .billet/open/{DMG_LEAF}.md (unusable)"),
+            format!("unresolved subtask .blt/open/{DMG_LEAF}.md (unusable)"),
             "fix or restore the referenced issue; see the other reported problems",
             Reaction::Unresolved(v),
             move |d: &Path| fs::write(d.join(dmg_path(DMG_LEAF)), "not an issue").unwrap(),
@@ -3966,21 +3950,21 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         )],
         K::DocsDirectory => vec![damage(
             "docs is a file",
-            ".billet/docs",
+            ".blt/docs",
             "must be a real directory (not a symbolic link)",
             "restore a real directory at this path or remove it",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".billet/docs"), "x").unwrap(),
+            move |d: &Path| fs::write(d.join(".blt/docs"), "x").unwrap(),
         )],
         K::DocsUnlistable => vec![damage(
             "docs unreadable",
-            ".billet/docs",
+            ".blt/docs",
             "cannot list directory: ",
             "fix directory permissions",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".billet/docs")).unwrap();
-                set_mode(&d.join(".billet/docs"), 0o000);
+                fs::create_dir_all(d.join(".blt/docs")).unwrap();
+                set_mode(&d.join(".blt/docs"), 0o000);
             },
         )],
         K::DocsEntryUnlistable => {
@@ -3991,77 +3975,74 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         }
         K::DocsNameNotUtf8 => vec![damage(
             "docs entry name is not UTF-8",
-            ".billet/docs/\u{fffd}",
+            ".blt/docs/\u{fffd}",
             "name is not valid UTF-8",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".billet/docs")).unwrap();
-                write_non_utf8(&d.join(".billet/docs"));
+                fs::create_dir_all(d.join(".blt/docs")).unwrap();
+                write_non_utf8(&d.join(".blt/docs"));
             },
         )],
         K::DocsSymlink => vec![damage(
             "docs entry is a symbolic link",
-            format!(".billet/docs/{v}"),
+            format!(".blt/docs/{v}"),
             "must be a real directory (not a symbolic link)",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".billet/docs")).unwrap();
+                fs::create_dir_all(d.join(".blt/docs")).unwrap();
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(
-                    d.join(".billet/open"),
-                    d.join(format!(".billet/docs/{v}")),
-                )
-                .unwrap();
+                std::os::unix::fs::symlink(d.join(".blt/open"), d.join(format!(".blt/docs/{v}")))
+                    .unwrap();
             },
         )],
         K::DocsNotDirectory => vec![damage(
             "docs entry is a file",
-            format!(".billet/docs/{v}"),
+            format!(".blt/docs/{v}"),
             "entry is not a directory",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".billet/docs")).unwrap();
-                fs::write(d.join(format!(".billet/docs/{v}")), "x").unwrap();
+                fs::create_dir_all(d.join(".blt/docs")).unwrap();
+                fs::write(d.join(format!(".blt/docs/{v}")), "x").unwrap();
             },
         )],
         K::DocsOrphan => vec![damage(
             "docs for a missing issue",
-            ".billet/docs/1fffff",
+            ".blt/docs/1fffff",
             "no issue with id 1fffff exists",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
-            move |d: &Path| fs::create_dir_all(d.join(".billet/docs/1fffff")).unwrap(),
+            move |d: &Path| fs::create_dir_all(d.join(".blt/docs/1fffff")).unwrap(),
         )],
         K::ConfigFile => vec![damage(
             "config.json is a directory",
-            ".billet/config.json",
+            ".blt/config.json",
             "must be a real regular file (not a symbolic link)",
-            "restore .billet/config.json as a regular file",
+            "restore .blt/config.json as a regular file",
             Reaction::Refused,
             move |d: &Path| {
-                fs::remove_file(d.join(".billet/config.json")).unwrap();
-                fs::create_dir(d.join(".billet/config.json")).unwrap();
+                fs::remove_file(d.join(".blt/config.json")).unwrap();
+                fs::create_dir(d.join(".blt/config.json")).unwrap();
             },
         )],
         K::ConfigMissing => vec![damage(
             "config.json missing",
-            ".billet/config.json",
+            ".blt/config.json",
             "config.json is missing",
             "run `blt init` to write the default configuration",
             Reaction::Refused,
-            move |d: &Path| fs::remove_file(d.join(".billet/config.json")).unwrap(),
+            move |d: &Path| fs::remove_file(d.join(".blt/config.json")).unwrap(),
         )],
         K::ConfigInvalid => vec![damage(
             "invalid prefix",
-            ".billet/config.json",
+            ".blt/config.json",
             "invalid prefix \"bad\"",
             "write {\"prefix\": \"B\"} or another valid prefix (use 1 to 8 uppercase letters, optionally followed by '-')",
             Reaction::Refused,
             move |d: &Path| {
-                fs::write(d.join(".billet/config.json"), "{\"prefix\": \"bad\"}\n").unwrap()
+                fs::write(d.join(".blt/config.json"), "{\"prefix\": \"bad\"}\n").unwrap()
             },
         )],
         K::DuplicateNumber => vec![damage(
@@ -4086,74 +4067,74 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         )],
         K::MemoryFile => vec![damage(
             "memory.md is a directory",
-            ".billet/memory.md",
+            ".blt/memory.md",
             "must be a real regular file (not a symbolic link)",
             "restore memory.md as a regular file or run `blt init`",
             Reaction::Refused,
             move |d: &Path| {
-                fs::remove_file(d.join(".billet/memory.md")).unwrap();
-                fs::create_dir(d.join(".billet/memory.md")).unwrap();
+                fs::remove_file(d.join(".blt/memory.md")).unwrap();
+                fs::create_dir(d.join(".blt/memory.md")).unwrap();
             },
         )],
         K::MemoryMissing => vec![damage(
             "memory.md missing",
-            ".billet/memory.md",
+            ".blt/memory.md",
             "memory.md is missing",
             "run `blt init` to create it",
             Reaction::Refused,
-            move |d: &Path| fs::remove_file(d.join(".billet/memory.md")).unwrap(),
+            move |d: &Path| fs::remove_file(d.join(".blt/memory.md")).unwrap(),
         )],
         K::MemoryUnreadable => vec![damage(
             "memory.md unreadable",
-            ".billet/memory.md",
+            ".blt/memory.md",
             "cannot read: ",
             "fix file permissions or restore memory.md",
             Reaction::Unaffected,
-            move |d: &Path| set_mode(&d.join(".billet/memory.md"), 0o000),
+            move |d: &Path| set_mode(&d.join(".blt/memory.md"), 0o000),
         )],
         K::MemoryMalformed => vec![damage(
             "memory.md malformed",
-            ".billet/memory.md",
+            ".blt/memory.md",
             "",
             "fix memory.md manually",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".billet/memory.md"), "junk\n").unwrap(),
+            move |d: &Path| fs::write(d.join(".blt/memory.md"), "junk\n").unwrap(),
         )],
         K::GitignoreFile => vec![damage(
             ".gitignore is a directory",
-            ".billet/.gitignore",
+            ".blt/.gitignore",
             "must be a real regular file (not a symbolic link)",
-            "restore .billet/.gitignore as a regular file",
+            "restore .blt/.gitignore as a regular file",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::remove_file(d.join(".billet/.gitignore")).unwrap();
-                fs::create_dir(d.join(".billet/.gitignore")).unwrap();
+                fs::remove_file(d.join(".blt/.gitignore")).unwrap();
+                fs::create_dir(d.join(".blt/.gitignore")).unwrap();
             },
         )],
         K::GitignoreMissing => vec![damage(
             ".gitignore missing",
-            ".billet/.gitignore",
+            ".blt/.gitignore",
             ".gitignore is missing",
-            "add the line `.*.tmp-*` to .billet/.gitignore",
+            "add the line `.*.tmp-*` to .blt/.gitignore",
             Reaction::Unaffected,
-            move |d: &Path| fs::remove_file(d.join(".billet/.gitignore")).unwrap(),
+            move |d: &Path| fs::remove_file(d.join(".blt/.gitignore")).unwrap(),
         )],
         K::GitignoreUnreadable => vec![damage(
             ".gitignore unreadable",
-            ".billet/.gitignore",
+            ".blt/.gitignore",
             "cannot read: ",
-            "fix file permissions or restore .billet/.gitignore",
+            "fix file permissions or restore .blt/.gitignore",
             Reaction::Unaffected,
-            move |d: &Path| set_mode(&d.join(".billet/.gitignore"), 0o000),
+            move |d: &Path| set_mode(&d.join(".blt/.gitignore"), 0o000),
         )],
         K::GitignoreLegacyRule => vec![damage(
             "legacy temporary rule",
-            ".billet/.gitignore",
+            ".blt/.gitignore",
             "legacy `/.*.tmp-*` rule does not ignore nested temporary files",
-            "replace `/.*.tmp-*` with `.*.tmp-*` in .billet/.gitignore",
+            "replace `/.*.tmp-*` with `.*.tmp-*` in .blt/.gitignore",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::write(d.join(".billet/.gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap()
+                fs::write(d.join(".blt/.gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap()
             },
         )],
         K::AgentInstructions => vec![damage(
@@ -4166,26 +4147,26 @@ fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'
         )],
         K::PendingMove => vec![damage(
             "pending move",
-            ".billet/.move",
+            ".blt/.move",
             format!("pending move journal for {DMG_HEALTHY}"),
-            "finish it with any write command in a writable checkout, or resolve .billet/.move manually",
+            "finish it with any write command in a writable checkout, or resolve .blt/.move manually",
             Reaction::Journal,
             move |d: &Path| {
                 let old = fs::read_to_string(d.join(dmg_path(DMG_HEALTHY))).unwrap();
                 let new = old.replace("status: open", "status: closed");
-                fs::write(d.join(".billet/.move"), journal(&old, &new)).unwrap();
+                fs::write(d.join(".blt/.move"), journal(&old, &new)).unwrap();
             },
         )],
         K::MoveJournal => vec![damage(
             "corrupt journal lengths",
-            ".billet/.move",
+            ".blt/.move",
             "",
-            "resolve .billet/.move manually",
+            "resolve .blt/.move manually",
             Reaction::Journal,
             move |d: &Path| {
                 fs::write(
-                    d.join(".billet/.move"),
-                    "BILLET-MOVE-1\n18446744073709551615\n2\nxy",
+                    d.join(".blt/.move"),
+                    "BLT-MOVE-1\n18446744073709551615\n2\nxy",
                 )
                 .unwrap()
             },
@@ -4208,10 +4189,10 @@ fn restore_modes(root: &Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         for rel in [
-            ".billet/closed",
-            ".billet/docs",
-            ".billet/memory.md",
-            ".billet/.gitignore",
+            ".blt/closed",
+            ".blt/docs",
+            ".blt/memory.md",
+            ".blt/.gitignore",
         ] {
             let path = root.join(rel);
             if let Ok(meta) = fs::symlink_metadata(&path) {
@@ -4318,7 +4299,7 @@ fn check_damage(base: &Path, root: &Path, kind: billet::ProblemKind, index: usiz
         );
     }
 
-    let lock = d.join(".billet/.lock");
+    let lock = d.join(".blt/.lock");
     let had_lock = lock.exists();
     if had_lock {
         fs::remove_file(&lock).unwrap();
@@ -4423,8 +4404,7 @@ fn check_damage(base: &Path, root: &Path, kind: billet::ProblemKind, index: usiz
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 for path in paths {
-                    let expected =
-                        usize::from(args[1] != "ready" || path.starts_with(".billet/open"));
+                    let expected = usize::from(args[1] != "ready" || path.starts_with(".blt/open"));
                     assert_eq!(
                         stderr.matches(&format!("skipping {path}:")).count(),
                         expected,
@@ -4594,11 +4574,10 @@ fn check_damage(base: &Path, root: &Path, kind: billet::ProblemKind, index: usiz
                 assert!(o.status.success(), "{label}: show");
                 assert!(
                     String::from_utf8_lossy(&o.stdout)
-                        .contains(&format!("Documents: .billet/docs/{DMG_VICTIM}/"))
+                        .contains(&format!("Documents: .blt/docs/{DMG_VICTIM}/"))
                 );
                 assert!(
-                    String::from_utf8_lossy(&o.stderr)
-                        .contains(&format!(".billet/docs/{DMG_VICTIM}"))
+                    String::from_utf8_lossy(&o.stderr).contains(&format!(".blt/docs/{DMG_VICTIM}"))
                 );
             }
         }
@@ -4640,8 +4619,8 @@ fn check_damage(base: &Path, root: &Path, kind: billet::ProblemKind, index: usiz
 
 fn check_journal(d: &Path, label: &str, dmg: &Damage) {
     let src = d.join(dmg_path(DMG_HEALTHY));
-    let dst = d.join(format!(".billet/closed/{DMG_HEALTHY}.md"));
-    let journal_file = d.join(".billet/.move");
+    let dst = d.join(format!(".blt/closed/{DMG_HEALTHY}.md"));
+    let journal_file = d.join(".blt/.move");
     if dmg.name == "corrupt journal lengths" {
         let o = run(d, &["ready"]);
         assert_eq!(o.status.code(), Some(1), "{label}");
@@ -4707,18 +4686,18 @@ fn separate_damage(kind: billet::ProblemKind) -> Option<&'static str> {
     use billet::ProblemKind as K;
     match kind {
         K::IssueDirectory | K::IssueDirectoryUnlistable => {
-            Some("replaces or locks .billet/closed, which the combined cases write to")
+            Some("replaces or locks .blt/closed, which the combined cases write to")
         }
         K::DocsDirectory | K::DocsUnlistable => {
-            Some("replaces or locks .billet/docs, which the combined cases write to")
+            Some("replaces or locks .blt/docs, which the combined cases write to")
         }
         K::MemoryFile | K::MemoryMissing | K::MemoryUnreadable => {
-            Some("the same .billet/memory.md as the combined MemoryMalformed case")
+            Some("the same .blt/memory.md as the combined MemoryMalformed case")
         }
         K::GitignoreFile | K::GitignoreMissing | K::GitignoreUnreadable => {
-            Some("the same .billet/.gitignore as the combined GitignoreLegacyRule case")
+            Some("the same .blt/.gitignore as the combined GitignoreLegacyRule case")
         }
-        K::PendingMove => Some("the same .billet/.move as the combined MoveJournal case"),
+        K::PendingMove => Some("the same .blt/.move as the combined MoveJournal case"),
         K::ConfigFile | K::ConfigMissing | K::ConfigInvalid => {
             Some("without a valid prefix every other case would show keys instead of handles")
         }
@@ -4804,7 +4783,7 @@ fn check_all_damages_at_once(base: &Path, root: &Path) {
     for (_, _, dmg) in &plan {
         (dmg.apply)(&d);
     }
-    let lock = d.join(".billet/.lock");
+    let lock = d.join(".blt/.lock");
     if lock.exists() {
         fs::remove_file(&lock).unwrap();
     }
@@ -4974,7 +4953,7 @@ fn check_command_contract(
             &sample_argv(command, "1e0001"),
             noreg,
             1,
-            "blt: no .billet registry found; run `blt init` in the project root\n",
+            "blt: no .blt registry found; run `blt init` in the project root\n",
             "refusal without a registry",
         );
     }
@@ -5323,7 +5302,7 @@ fn crew_review_loop() {
     let sub = d.join("sub");
     fs::create_dir(&sub).unwrap();
     let key = key_of(&d, &id);
-    let round = |n: u32| format!(".billet/docs/{key}/review/round-{n:02}");
+    let round = |n: u32| format!(".blt/docs/{key}/review/round-{n:02}");
     let roles = [
         ("developer", "# Role: developer"),
         ("auditor", "# Role: auditor\n"),
@@ -5357,7 +5336,7 @@ fn crew_review_loop() {
     let out = crew_ok(&sub, &["architect", &proposal]);
     only_role(&out, "architect");
     assert!(!out.contains("Round:"), "{out}");
-    let architecture = format!(".billet/docs/{}/architecture.md", key_of(&d, &proposal));
+    let architecture = format!(".blt/docs/{}/architecture.md", key_of(&d, &proposal));
     assert!(
         out.contains(&format!("Write: {architecture} (created)")),
         "{out}"
@@ -5562,7 +5541,7 @@ fn numbers_follow_the_configured_prefix() {
     let d = dir("numbers");
     ok(&d, &["init", "--no-hooks"]);
     assert_eq!(
-        fs::read_to_string(d.join(".billet/config.json")).unwrap(),
+        fs::read_to_string(d.join(".blt/config.json")).unwrap(),
         "{\n  \"prefix\": \"B\"\n}\n"
     );
     let first = add(&d, "first");
@@ -5574,10 +5553,9 @@ fn numbers_follow_the_configured_prefix() {
     );
     let key = key_of(&d, "B1");
     assert!(billet::issue::valid_key(&key), "{key}");
-    let file = fs::read_to_string(d.join(format!(".billet/open/{key}.md"))).unwrap();
+    let file = fs::read_to_string(d.join(format!(".blt/open/{key}.md"))).unwrap();
     assert!(file.lines().any(|l| l == "number: 1"), "{file}");
-    let child =
-        fs::read_to_string(d.join(format!(".billet/open/{}.md", key_of(&d, "B1.1")))).unwrap();
+    let child = fs::read_to_string(d.join(format!(".blt/open/{}.md", key_of(&d, "B1.1")))).unwrap();
     assert!(child.lines().any(|l| l == "number: null"), "{child}");
     for reference in ["B1", "b1", "1", key.as_str()] {
         assert_eq!(show_value(&d, reference)["id"], "B1", "{reference}");
@@ -5608,7 +5586,7 @@ fn numbers_follow_the_configured_prefix() {
         "B11",
         "the next number follows the largest"
     );
-    let fourth = d.join(format!(".billet/open/{}.md", key_of(&d, "B11")));
+    let fourth = d.join(format!(".blt/open/{}.md", key_of(&d, "B11")));
     let text = fs::read_to_string(&fourth).unwrap();
     fs::write(
         &fourth,
@@ -5622,7 +5600,7 @@ fn numbers_follow_the_configured_prefix() {
     );
     fs::write(&fourth, text).unwrap();
 
-    fs::write(d.join(".billet/config.json"), "{\"prefix\": \"AN-\"}\n").unwrap();
+    fs::write(d.join(".blt/config.json"), "{\"prefix\": \"AN-\"}\n").unwrap();
     assert_eq!(show_value(&d, "an-10.1")["id"], "AN-10.1");
     assert!(ok(&d, &["list"]).contains("  AN-11 open 2 - fourth\n"));
 

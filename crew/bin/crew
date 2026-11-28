@@ -52,7 +52,7 @@ round_name() {
 find_root() {
     dir=$PWD
     while :; do
-        if [ -d "$dir/.billet" ]; then
+        if [ -d "$dir/.blt" ]; then
             printf '%s\n' "$dir"
             return 0
         fi
@@ -76,7 +76,7 @@ load() {
         grep -E '^- [^ ]* [^ ]* UTC (submitted for review|rework requested|reopened)' |
         tail -n 1 |
         sed -E 's/^- [^ ]* [^ ]* UTC //')
-    ROOT=$(find_root) || refuse "no .billet registry found above $PWD"
+    ROOT=$(find_root) || refuse "no .blt registry found above $PWD"
 }
 
 escape() {
@@ -113,7 +113,7 @@ fingerprint() {
     head=$(git rev-parse --verify -q HEAD) || head=none
     base=$head
     [ "$head" = none ] && base=$(git hash-object -t tree /dev/null)
-    exclude=':(glob,exclude)**/.billet/**'
+    exclude=':(glob,exclude)**/.blt/**'
     diff=$(git diff --binary "$base" -- . "$exclude" | git hash-object --stdin)
     untracked=$(git ls-files -z --others --exclude-standard -- . "$exclude" |
         tr '\0' '\n' |

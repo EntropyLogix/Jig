@@ -2,7 +2,7 @@
 
 Billet (command `blt`) is a file-based issue tracker and project memory for
 people and coding agents. Issues are plain Markdown files with YAML frontmatter
-under `.billet/`; there is no database, service, or mandatory Git integration.
+under `.blt/`; there is no database, service, or mandatory Git integration.
 Each checkout sees its own files. People can read the records without the CLI;
 `blt` adds a shared workflow for dependencies, claims, and review.
 
@@ -49,9 +49,9 @@ blt recall                  # list remembered topics
 ```
 
 Files may be browsed and hand-edited directly; agents use `blt` for registry
-changes so that mutations are serialized by `.billet/.lock` and cross-directory
-moves are journaled through `.billet/.move` (a crashed move is finished on the
-next command). Agents write issue documents directly under `.billet/docs/KEY/`.
+changes so that mutations are serialized by `.blt/.lock` and cross-directory
+moves are journaled through `.blt/.move` (a crashed move is finished on the
+next command). Agents write issue documents directly under `.blt/docs/KEY/`.
 
 ## Workflow
 
@@ -63,7 +63,7 @@ An issue moves through five statuses:
 | `open` | the contract is agreed and can be implemented | `claim` → `claimed`; `revise` → `proposed` |
 | `claimed` | one agent or person is working on it | `review` → `review`; `unclaim` → `open` |
 | `review` | the work is handed over for review | `rework` → `claimed` (same assignee); `close` → `closed` |
-| `closed` | done or rejected; the file moves to `.billet/closed/` | `reopen` → `open` |
+| `closed` | done or rejected; the file moves to `.blt/closed/` | `reopen` → `open` |
 
 A person may also `close` an issue from any active status, with or without a
 review, for example as a duplicate or as obsolete.
@@ -80,7 +80,7 @@ an agent for that issue.
 People and agents refer to an issue by its handle: the project prefix and a
 number, `B1`, `B2`, … in order of creation, and `B1.1` for a subtask of `B1`.
 The prefix is set once with `blt init --prefix AN-` (default `B`) and lives in
-`.billet/config.json`; changing it there changes every handle at once. Commands
+`.blt/config.json`; changing it there changes every handle at once. Commands
 also take the bare number (`blt show 12`) and ignore case (`b12`).
 
 Behind every handle is a random six-character key (`5a3f35`) that names the
@@ -101,14 +101,14 @@ agent without a shell or for a client where a person approves tool calls. An
 agent with a shell can use the CLI and its hooks, which use less context than
 the MCP tool schemas.
 
-The server searches for `.billet/` upward from its working directory for every
+The server searches for `.blt/` upward from its working directory for every
 tool call, so the client must start it in the project. `blt init` does not
 register the server with a client.
 
 Claude Code, using the project scope, can register it with:
 
 ```sh
-claude mcp add --scope project billet -- blt mcp
+claude mcp add --scope project blt -- blt mcp
 ```
 
 For a project permission policy that asks before human decisions, use the
@@ -118,13 +118,13 @@ following entries in `.claude/settings.json`:
 {
   "permissions": {
     "ask": [
-      "mcp__billet__approve",
-      "mcp__billet__revise",
-      "mcp__billet__rework",
-      "mcp__billet__close",
-      "mcp__billet__reopen",
-      "mcp__billet__release",
-      "mcp__billet__init"
+      "mcp__blt__approve",
+      "mcp__blt__revise",
+      "mcp__blt__rework",
+      "mcp__blt__close",
+      "mcp__blt__reopen",
+      "mcp__blt__release",
+      "mcp__blt__init"
     ]
   }
 }
@@ -134,7 +134,7 @@ Codex uses a TOML entry in `~/.codex/config.toml`, or in `.codex/config.toml`
 for a trusted project:
 
 ```toml
-[mcp_servers.billet]
+[mcp_servers.blt]
 command = "blt"
 args = ["mcp"]
 ```
@@ -197,12 +197,12 @@ array.
 `blt check` audits the registry and reports every problem in one run —
 unreadable issue files, name/ID mismatches, statuses in the wrong directory,
 duplicate IDs, conflict markers, missing blockers or ancestors, dependency
-cycles, inconsistent fields, a pending or mismatched `.billet/.move` journal, an
+cycles, inconsistent fields, a pending or mismatched `.blt/.move` journal, an
 unreadable `memory.md`, unexpected files, and a leftover legacy `/.*.tmp-*` rule
-in `.billet/.gitignore` (the anchored form never ignored nested temporary
+in `.blt/.gitignore` (the anchored form never ignored nested temporary
 files). Each problem prints as `{path,problem,hint}` (JSON or text); exit is 1
 when problems exist, 0 when clean. `check` only reports — it never modifies
-`.billet/`, finishes a pending move, or creates `.billet/.lock`. Agents do not
+`.blt/`, finishes a pending move, or creates `.blt/.lock`. Agents do not
 repair registries: when `blt ready` warns, run `blt check` and report the result
 to a human instead of removing dependencies or editing files.
 
@@ -215,8 +215,8 @@ children of an unusable intermediate node under the nearest visible dotted
 ancestor. Pointed reads still fail on an unusable record: `show ID` and
 `tree ID` refuse an ID whose own file is unusable, as does `claim`. Read
 commands (`start`, `ready`, `show`, `list`, `tree`, `recall`, `check`) also
-work on a checkout without write access to `.billet/`; they never need to create
-`.billet/.lock`. On a writable registry a read command may finish an interrupted
+work on a checkout without write access to `.blt/`; they never need to create
+`.blt/.lock`. On a writable registry a read command may finish an interrupted
 move under an upgraded lock; where it cannot write, a pending move is reported
 as an error.
 
@@ -240,7 +240,7 @@ A file whose `priority` is missing, `null`, or outside 0–4 is invalid:
 ## Issue documents
 
 Long analyses, measurements, implementation instructions, and review or audit
-reports for one issue live under `.billet/docs/KEY/`, named by the issue's key.
+reports for one issue live under `.blt/docs/KEY/`, named by the issue's key.
 The directory stays put across status changes and renumbering. People and agents
 write these document files directly, while `blt` does not create, edit, move, or
 remove them. The issue description keeps the current contract and can reference
@@ -249,16 +249,16 @@ the documents that support it.
 For example:
 
 ```text
-.billet/docs/5a3f35/analysis.md
-.billet/docs/5a3f35/review/round-1.md
-.billet/docs/5a3f35/review/round-2.md
+.blt/docs/5a3f35/analysis.md
+.blt/docs/5a3f35/review/round-1.md
+.blt/docs/5a3f35/review/round-2.md
 ```
 
-`blt show B12` always ends with its `Documents: .billet/docs/5a3f35/`
+`blt show B12` always ends with its `Documents: .blt/docs/5a3f35/`
 line. It adds `(none)` when the directory has no files, or indents the sorted
 file paths by two spaces. JSON `show` returns the directory in `docs_dir` and
 the files in `docs`. `blt check` reports a file directly under
-`.billet/docs/` or a directory that is not named after an existing issue.
+`.blt/docs/` or a directory that is not named after an existing issue.
 
 ## Subtasks and dependencies
 
@@ -333,7 +333,7 @@ scope, so it is set only on closed issues.
 `blt init` installs agent integration into the project by default, so running
 it in an already-initialized checkout is the opt-in path:
 
-- `AGENTS.md` gains a `<!-- BEGIN BILLET v:N hash:H -->…<!-- END BILLET -->`
+- `AGENTS.md` gains a `<!-- BEGIN BLT v:N hash:H -->…<!-- END BLT -->`
   managed block with the workflow rules. Existing file bytes are preserved;
   an unmodified older-version block is upgraded in place, a block edited by
   hand (hash mismatch) is left alone with a notice, and malformed or
@@ -385,7 +385,7 @@ Crew uses only Billet's statuses, history, notes, and issue documents; the
 
 ## Issue file format
 
-Each issue is `<id>.md` under `.billet/open` or `.billet/closed`: a
+Each issue is `<id>.md` under `.blt/open` or `.blt/closed`: a
 `---`-delimited block of fixed-order one-line YAML fields (quoted scalars,
 `status` plain, `null`/`[]` for absent values), then a blank line, an optional
 `## Closing Summary` blockquote, the free-form Markdown body, and the managed
@@ -395,7 +395,7 @@ byte-for-byte.
 
 ## Scope notes
 
-- Coordination is per-checkout via the local `.billet/.lock` file lock. There is
+- Coordination is per-checkout via the local `.blt/.lock` file lock. There is
   no global arbitration between independently edited copies; conflicts surface
   as diagnostics (duplicate IDs, merge markers, move-journal mismatches) for
   explicit resolution.
@@ -404,7 +404,7 @@ byte-for-byte.
   `~/.local/state`); the IP, MAC, and hostname are never used, and the install
   identifier never enters the project.
 - `blt` never runs Git, installs Git hooks, or picks winners by timestamp;
-  people using the project choose when and how to synchronize `.billet/`.
+  people using the project choose when and how to synchronize `.blt/`.
 
 ## Development
 

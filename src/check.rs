@@ -233,7 +233,7 @@ impl Snapshot {
 }
 
 fn rel(place: Place, name: &std::ffi::OsStr) -> PathBuf {
-    PathBuf::from(".billet").join(place.dir()).join(name)
+    PathBuf::from(".blt").join(place.dir()).join(name)
 }
 
 fn stray_number(text: &str) -> Option<u64> {
@@ -250,7 +250,7 @@ pub(crate) fn scan(billet: &Path) -> Snapshot {
     let mut parse_failures: Vec<(String, PathBuf)> = Vec::new();
     for place in [Place::Open, Place::Closed] {
         let dir = billet.join(place.dir());
-        let rel_dir = PathBuf::from(".billet").join(place.dir());
+        let rel_dir = PathBuf::from(".blt").join(place.dir());
         match store::metadata_cause(&dir, true) {
             Ok(Some(_)) => {}
             Ok(None) => continue,
@@ -564,7 +564,7 @@ fn dependency_cycles(snap: &Snapshot, names: &Names) -> Vec<Problem> {
                     display.push_str(&names.name(&first));
                     problems.push(Problem::at(
                         ProblemKind::DependencyCycle,
-                        PathBuf::from(".billet")
+                        PathBuf::from(".blt")
                             .join(Place::of(graph[first.as_str()].status).dir())
                             .join(format!("{first}.md")),
                         format!("dependency cycle {display}"),
@@ -597,7 +597,7 @@ fn issue_docs_problems(billet: &Path, snap: &Snapshot) -> Vec<Problem> {
             Err(error) => {
                 problems.push(Problem::at(
                     ProblemKind::DocsUnlistable,
-                    PathBuf::from(".billet/docs"),
+                    PathBuf::from(".blt/docs"),
                     format!("cannot list directory: {error}"),
                     "fix directory permissions",
                 ));
@@ -608,7 +608,7 @@ fn issue_docs_problems(billet: &Path, snap: &Snapshot) -> Vec<Problem> {
         Err(error) => {
             problems.push(Problem::at(
                 ProblemKind::DocsDirectory,
-                PathBuf::from(".billet/docs"),
+                PathBuf::from(".blt/docs"),
                 error,
                 "restore a real directory at this path or remove it",
             ));
@@ -626,14 +626,14 @@ fn issue_docs_problems(billet: &Path, snap: &Snapshot) -> Vec<Problem> {
             Err(error) => {
                 problems.push(Problem::at(
                     ProblemKind::DocsEntryUnlistable,
-                    PathBuf::from(".billet/docs"),
+                    PathBuf::from(".blt/docs"),
                     format!("cannot list entry: {error}"),
                     "fix directory permissions",
                 ));
                 continue;
             }
         };
-        let path = PathBuf::from(".billet/docs").join(entry.file_name());
+        let path = PathBuf::from(".blt/docs").join(entry.file_name());
         let file_name = entry.file_name();
         let name = match file_name.to_str() {
             Some(name) => name,
@@ -686,7 +686,7 @@ fn issue_docs_problems(billet: &Path, snap: &Snapshot) -> Vec<Problem> {
 }
 
 pub fn problem_kinds(root: &Path) -> Vec<(ProblemKind, PathBuf)> {
-    collect(&root.join(".billet"))
+    collect(&root.join(".blt"))
         .into_iter()
         .map(|problem| (problem.kind, problem.path))
         .collect()
@@ -697,14 +697,14 @@ pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
     let mut problems = snap.problems.clone();
     problems.extend(issue_docs_problems(billet, &snap));
 
-    let rel_config = PathBuf::from(".billet/config.json");
+    let rel_config = PathBuf::from(".blt/config.json");
     let mut prefix = None;
     match store::metadata_cause(&billet.join(config::FILE), false) {
         Err(e) => problems.push(Problem::at(
             ProblemKind::ConfigFile,
             rel_config.clone(),
             e,
-            "restore .billet/config.json as a regular file",
+            "restore .blt/config.json as a regular file",
         )),
         Ok(None) => problems.push(Problem::at(
             ProblemKind::ConfigMissing,
@@ -752,7 +752,7 @@ pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
         }
     }
 
-    let rel_mem = PathBuf::from(".billet/memory.md");
+    let rel_mem = PathBuf::from(".blt/memory.md");
     match store::metadata_cause(&billet.join("memory.md"), false) {
         Err(e) => problems.push(Problem::at(
             ProblemKind::MemoryFile,
@@ -786,7 +786,7 @@ pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
         },
     }
 
-    let rel_gi = PathBuf::from(".billet/.gitignore");
+    let rel_gi = PathBuf::from(".blt/.gitignore");
     const LEGACY: &str = "/.*.tmp-*";
     const RULE: &str = ".*.tmp-*";
     match store::metadata_cause(&billet.join(".gitignore"), false) {
@@ -794,20 +794,20 @@ pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
             ProblemKind::GitignoreFile,
             rel_gi,
             e,
-            "restore .billet/.gitignore as a regular file",
+            "restore .blt/.gitignore as a regular file",
         )),
         Ok(None) => problems.push(Problem::at(
             ProblemKind::GitignoreMissing,
             rel_gi,
             ".gitignore is missing",
-            format!("add the line `{RULE}` to .billet/.gitignore"),
+            format!("add the line `{RULE}` to .blt/.gitignore"),
         )),
         Ok(Some(_)) => match fs::read_to_string(billet.join(".gitignore")) {
             Err(e) => problems.push(Problem::at(
                 ProblemKind::GitignoreUnreadable,
                 rel_gi,
                 format!("cannot read: {e}"),
-                "fix file permissions or restore .billet/.gitignore",
+                "fix file permissions or restore .blt/.gitignore",
             )),
             Ok(text) => {
                 if text.lines().any(|l| l == LEGACY) {
@@ -815,7 +815,7 @@ pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
                         ProblemKind::GitignoreLegacyRule,
                         rel_gi,
                         format!("legacy `{LEGACY}` rule does not ignore nested temporary files"),
-                        format!("replace `{LEGACY}` with `{RULE}` in .billet/.gitignore"),
+                        format!("replace `{LEGACY}` with `{RULE}` in .blt/.gitignore"),
                     ));
                 }
             }
@@ -835,15 +835,15 @@ pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
         Ok(None) => {}
         Ok(Some(id)) => problems.push(Problem::at(
             ProblemKind::PendingMove,
-            PathBuf::from(".billet/.move"),
+            PathBuf::from(".blt/.move"),
             format!("pending move journal for {id}"),
-            "finish it with any write command in a writable checkout, or resolve .billet/.move manually",
+            "finish it with any write command in a writable checkout, or resolve .blt/.move manually",
         )),
         Err(e) => problems.push(Problem::at(
             ProblemKind::MoveJournal,
-            PathBuf::from(".billet/.move"),
+            PathBuf::from(".blt/.move"),
             e,
-            "resolve .billet/.move manually",
+            "resolve .blt/.move manually",
         )),
     }
 

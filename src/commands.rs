@@ -1085,7 +1085,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "init",
         group: HelpGroup::Setup,
         syntax: "init [--no-hooks] [--prefix P]",
-        description: "create .billet/, AGENTS.md and project hooks",
+        description: "create .blt/, AGENTS.md and project hooks",
         args: ARGS_INIT,
         handler: handle_init,
         decision: true,
@@ -1353,9 +1353,9 @@ fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
     let _lock = registry(cwd)?;
     let notice = integration::install(cwd, !flag(&p, "no_hooks")).map_err(fail)?;
     let mut out = if created {
-        "initialized .billet/\n".to_string()
+        "initialized .blt/\n".to_string()
     } else {
-        ".billet/ already initialized\n".to_string()
+        ".blt/ already initialized\n".to_string()
     };
     if let Some(notice) = notice {
         out.push_str(&notice);
@@ -1536,7 +1536,7 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
         let snap = check::scan(billet);
         let names = snapshot_names(billet, &snap)?;
         let today = clock::today();
-        let mut warnings = file_warnings(&snap, |p| p.starts_with(".billet/open"), true);
+        let mut warnings = file_warnings(&snap, |p| p.starts_with(".blt/open"), true);
         warnings.extend(duplicate_warnings(&names));
         let mut rows = Vec::new();
         for i in snap.issues() {
@@ -1645,7 +1645,7 @@ fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fai
             return Ok((
                 Vec::new(),
                 vec![
-                    ".billet/docs: must be a real directory (not a symbolic link); run `blt check`"
+                    ".blt/docs: must be a real directory (not a symbolic link); run `blt check`"
                         .to_string(),
                 ],
             ));
@@ -1653,7 +1653,7 @@ fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fai
         Ok(_) => {
             return Ok((
                 Vec::new(),
-                vec![".billet/docs: must be a real directory; run `blt check`".to_string()],
+                vec![".blt/docs: must be a real directory; run `blt check`".to_string()],
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1663,7 +1663,7 @@ fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fai
             return Ok((
                 Vec::new(),
                 vec![format!(
-                    ".billet/docs: cannot inspect: {error}; run `blt check`"
+                    ".blt/docs: cannot inspect: {error}; run `blt check`"
                 )],
             ));
         }
@@ -1677,7 +1677,7 @@ fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fai
         Err(error) => {
             return Ok((
                 Vec::new(),
-                vec![format!(".billet/docs/{id}: cannot inspect: {error}")],
+                vec![format!(".blt/docs/{id}: cannot inspect: {error}")],
             ));
         }
     };
@@ -1685,7 +1685,7 @@ fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fai
         return Ok((
             Vec::new(),
             vec![format!(
-                ".billet/docs/{id}: must be a real directory (not a symbolic link); run `blt check`"
+                ".blt/docs/{id}: must be a real directory (not a symbolic link); run `blt check`"
             )],
         ));
     }
@@ -1693,7 +1693,7 @@ fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fai
         return Ok((
             Vec::new(),
             vec![format!(
-                ".billet/docs/{id}: must be a real directory; run `blt check`"
+                ".blt/docs/{id}: must be a real directory; run `blt check`"
             )],
         ));
     }
@@ -1819,7 +1819,7 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
             )
         };
         let (docs, doc_warnings) = issue_docs(billet, &i.id)?;
-        let docs_dir = format!(".billet/docs/{}/", i.id);
+        let docs_dir = format!(".blt/docs/{}/", i.id);
         let mut readiness = domain::eligibility(
             i,
             &clock::today(),
@@ -2451,7 +2451,7 @@ fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
     let warnings = file_warnings(
         &snap,
         |path| {
-            path.starts_with(".billet/closed")
+            path.starts_with(".blt/closed")
                 && snap
                     .records
                     .iter()

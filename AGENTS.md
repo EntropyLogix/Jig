@@ -1,4 +1,4 @@
-<!-- BEGIN BILLET v:1 hash:6182831f357bfb1d -->
+<!-- BEGIN BLT v:1 hash:6182831f357bfb1d -->
 ## Issue tracking with Billet
 
 This project tracks work with `blt`. Do not keep task lists in other Markdown or TODO files. Your built-in todo or plan tool is only for the steps of the current task; record anything that must outlive this session in `blt`.
@@ -13,4 +13,4 @@ If `blt` is not installed, ask a person to install it: `cargo install --locked -
 - Stopping before the work is done: leave a `blt note`; run `blt unclaim ID` if you will not continue.
 - Read project facts on demand with `blt recall [TOPIC]`; record durable project facts with `blt remember TOPIC TEXT`. Keep personal preferences in your own memory.
 - If `blt ready` warns or lists nothing, run `blt check` and report to a person; never remove dependencies or approve proposals to get unblocked.
-<!-- END BILLET -->
+<!-- END BLT -->

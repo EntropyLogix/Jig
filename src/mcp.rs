@@ -89,7 +89,7 @@ fn initialize_response(id: Value) -> Value {
         id,
         json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "serverInfo": {"name":"billet","version":env!("CARGO_PKG_VERSION")},
+            "serverInfo": {"name":"blt","version":env!("CARGO_PKG_VERSION")},
             "capabilities": {"tools": {}},
             "instructions": instructions
         }),
