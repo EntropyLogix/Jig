@@ -5466,6 +5466,157 @@ fn crew_review_loop() {
     );
 }
 
+fn sha256_of(path: &Path) -> String {
+    let tool = if Command::new("sha256sum").arg("--version").output().is_ok() {
+        vec!["sha256sum"]
+    } else {
+        vec!["shasum", "-a", "256"]
+    };
+    let o = Command::new(tool[0])
+        .args(&tool[1..])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    String::from_utf8(o.stdout).unwrap()[..64].to_string()
+}
+
+#[test]
+fn release_scripts_trust_only_published_checksums() {
+    let d = dir("release");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let uname = |flag: &str| {
+        let o = Command::new("uname").arg(flag).output().unwrap();
+        String::from_utf8(o.stdout).unwrap().trim().to_string()
+    };
+    let target = match (uname("-s").as_str(), uname("-m").as_str()) {
+        ("Darwin", "arm64") => "aarch64-apple-darwin",
+        ("Darwin", "x86_64") => "x86_64-apple-darwin",
+        ("Linux", "x86_64" | "amd64") => "x86_64-unknown-linux-musl",
+        ("Linux", "aarch64" | "arm64") => "aarch64-unknown-linux-musl",
+        other => panic!("no release target for {other:?}"),
+    };
+    let version = "9.9.9";
+    let download = d.join(format!("releases/download/v{version}"));
+    let name = format!("blt-{version}-{target}");
+    let staged = d.join("stage").join(&name);
+    fs::create_dir_all(&staged).unwrap();
+    fs::create_dir_all(&download).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_blt"), staged.join("blt")).unwrap();
+    fs::copy(root.join("LICENSE"), staged.join("LICENSE")).unwrap();
+    let archive = download.join(format!("{name}.tar.gz"));
+    let tar = Command::new("tar")
+        .arg("-C")
+        .arg(d.join("stage"))
+        .arg("-czf")
+        .arg(&archive)
+        .arg(&name)
+        .status()
+        .unwrap();
+    assert!(tar.success());
+    let good = format!("{}  {name}.tar.gz\n", sha256_of(&archive));
+    let sums = download.join("SHA256SUMS");
+    let install = |args: &[&str]| {
+        Command::new(root.join("install.sh"))
+            .args(args)
+            .env(
+                "BLT_RELEASES_URL",
+                format!("file://{}", d.join("releases").display()),
+            )
+            .output()
+            .unwrap()
+    };
+
+    fs::write(&sums, &good).unwrap();
+    let bin = d.join("bin");
+    let bin_arg = bin.display().to_string();
+    let o = install(&["--version", version, "--dir", &bin_arg]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        String::from_utf8_lossy(&o.stdout)
+            .starts_with(&format!("installed blt {version} to {bin_arg}/blt\n"))
+    );
+    let installed = Command::new(bin.join("blt"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&installed.stdout),
+        format!("blt {}\n", env!("CARGO_PKG_VERSION"))
+    );
+
+    let tampered = format!("{}{}", "0".repeat(64), &good[64..]);
+    for (sums_text, args, message) in [
+        (
+            tampered.as_str(),
+            vec!["--version", version],
+            "checksum mismatch",
+        ),
+        (good.as_str(), vec!["--version", "9.9.8"], "cannot download"),
+        ("", vec!["--version", version], "has no entry"),
+    ] {
+        fs::write(&sums, sums_text).unwrap();
+        let other = d.join("other-bin");
+        let other_arg = other.display().to_string();
+        let mut argv = args.clone();
+        argv.extend(["--dir", other_arg.as_str()]);
+        let o = install(&argv);
+        assert_eq!(o.status.code(), Some(1), "{argv:?}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains(message),
+            "{argv:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(!other.exists(), "{argv:?} installed something");
+    }
+
+    let targets = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-musl",
+        "x86_64-unknown-linux-musl",
+    ];
+    let all: String = targets
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("{}  blt-{version}-{t}.tar.gz\n", i.to_string().repeat(64)))
+        .collect();
+    fs::write(&sums, &all).unwrap();
+    let formula = Command::new(root.join("packaging/homebrew/formula.sh"))
+        .arg(version)
+        .arg(&sums)
+        .output()
+        .unwrap();
+    assert!(formula.status.success());
+    let text = String::from_utf8(formula.stdout).unwrap();
+    assert!(text.starts_with("class Blt < Formula\n"), "{text}");
+    assert!(
+        text.contains(&format!("  version \"{version}\"\n")),
+        "{text}"
+    );
+    for (i, t) in targets.iter().enumerate() {
+        assert!(
+            text.contains(&format!(
+                "      url \"https://github.com/EntropyLogix/Billet/releases/download/v{version}/blt-{version}-{t}.tar.gz\"\n      sha256 \"{}\"\n",
+                i.to_string().repeat(64)
+            )),
+            "{t}: {text}"
+        );
+    }
+    fs::write(&sums, all.lines().skip(1).collect::<Vec<_>>().join("\n")).unwrap();
+    let missing = Command::new(root.join("packaging/homebrew/formula.sh"))
+        .arg(version)
+        .arg(&sums)
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&missing.stderr)
+            .contains("no checksum for blt-9.9.9-aarch64-apple-darwin")
+    );
+    assert!(missing.stdout.is_empty());
+}
+
 #[test]
 fn crew_install_and_uninstall() {
     let home = dir("crewhome");

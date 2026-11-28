@@ -11,24 +11,43 @@ lives at [EntropyLogix/Billet](https://github.com/EntropyLogix/Billet).
 
 ## Install
 
-Use Rust 1.89 or newer on Linux or macOS. From this repository checkout:
+Billet runs on macOS and Linux, and on Windows inside WSL. With Homebrew, on
+macOS or Linux:
 
 ```sh
-cargo install --path . --locked
+brew install entropylogix/tap/blt
 ```
 
-To install a tagged release from GitHub (once the owner has published the
-tag), for example `v1.0.2`:
+`brew upgrade blt` installs later releases. Without Homebrew:
 
 ```sh
-cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.2
+curl -fsSL https://raw.githubusercontent.com/EntropyLogix/Billet/main/install.sh | sh
 ```
 
-The `blt` binary lands on your Cargo `PATH` (usually `~/.cargo/bin`) and needs
-no other checkout at runtime. Its only direct third-party dependency is pinned
-`serde_json`, used for editing agent configuration during `init` and for JSON-RPC
-messages in `blt mcp`. License texts for the resolved runtime crates live in
-`licenses/`.
+The script downloads the latest release for your platform, checks it against
+the release's `SHA256SUMS`, and installs `blt` into `~/.local/bin`. Pass
+`--version X.Y.Z` or `--dir DIR` after `sh -s --` to choose another release or
+directory. It installs nothing when the checksum does not match.
+
+From source, with Rust 1.89 or newer:
+
+```sh
+cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.3
+cargo install --path . --locked    # from a checkout
+```
+
+Every release on GitHub carries `blt` for macOS (arm64 and x86_64) and Linux
+(x86_64 and arm64, statically linked) with a `SHA256SUMS` file. Pushing a `v*`
+tag runs `.github/workflows/release.yml`: it checks that the tag matches the
+package version, runs the tests, builds the four archives, publishes the
+release, and updates the Homebrew formula when the `TAP_TOKEN` secret is set;
+without it, `packaging/homebrew/formula.sh VERSION SHA256SUMS` prints the
+formula to commit by hand.
+
+The `blt` binary needs no other checkout at runtime. Its only direct third-party
+dependency is pinned `serde_json`, used for editing agent configuration during
+`init` and for JSON-RPC messages in `blt mcp`. License texts for the resolved
+runtime crates live in `licenses/`.
 
 ## Quick start
 
