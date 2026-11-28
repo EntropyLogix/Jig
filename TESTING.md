@@ -68,9 +68,11 @@ problem kind, seed), so the failure points to the declaration to fix.
 
 ## Harness
 
-- Each test gets its own directory under `tmp/tests/` and its own
-  `XDG_STATE_HOME`. Tests run in parallel and do not depend on each
-  other's order.
+- Each test gets its own directory under `jig-tests/` in the system
+  temporary directory, and its own `XDG_STATE_HOME`. The directory is
+  outside the checkout because this repository tracks its own work in Jig,
+  and a test must never discover that registry. Tests run in parallel and
+  do not depend on each other's order.
 - Child processes: read stdout and stderr while the process runs, assert
   the exit code, and treat a timeout as detecting a hang (seconds, not
   milliseconds), never as measuring speed. No fixed sleeps.

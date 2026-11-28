@@ -628,7 +628,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/tests");
+        let base = std::env::temp_dir().join("jig-tests");
         fs::create_dir_all(&base).unwrap();
         let p = base.join(format!(
             "{name}-{}-{}",

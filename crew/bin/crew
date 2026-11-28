@@ -1,0 +1,334 @@
+#!/bin/sh
+set -u
+
+SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+CREW="$SELF_DIR/crew"
+case $CREW in
+    "$HOME"/*) CREW="~${CREW#"$HOME"}" ;;
+esac
+SKILL_DIR=$(cd "$SELF_DIR/.." && pwd)
+
+usage() {
+    cat <<'EOF'
+Usage:
+  crew dev ID LABEL                     developer: implement or fix the issue
+  crew audit ID LABEL [--cross-check]   auditor: audit the current review round
+  crew lead ID                          review lead: merge the round into a decision
+  crew fingerprint                      print the code fingerprint for a handoff
+
+LABEL names the agent (letters, digits, '.', '_', '-'), e.g. claude-dev.
+Run crew inside the project that holds the Jig registry.
+EOF
+}
+
+refuse() {
+    printf 'crew: %s\n' "$1" >&2
+    shift
+    for line in "$@"; do
+        printf '%s\n' "$line" >&2
+    done
+    exit 2
+}
+
+need() {
+    for tool in jig jq git; do
+        command -v "$tool" >/dev/null 2>&1 || refuse "$tool is required but not installed"
+    done
+}
+
+check_label() {
+    case $1 in
+        '' | .* | *[!A-Za-z0-9._-]*)
+            refuse "invalid label \"$1\": use letters, digits, '.', '_' or '-'"
+            ;;
+    esac
+}
+
+round_name() {
+    printf 'round-%02d' "$1"
+}
+
+find_root() {
+    dir=$PWD
+    while :; do
+        if [ -d "$dir/.jig" ]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+        [ "$dir" = / ] && return 1
+        dir=$(dirname "$dir")
+    done
+}
+
+load() {
+    info=$(jig show "$1" --json) || exit 2
+    ID=$(printf '%s' "$info" | jq -r '.id')
+    STATUS=$(printf '%s' "$info" | jq -r '.status')
+    ASSIGNEE=$(printf '%s' "$info" | jq -r '.assignee // ""')
+    DOCS=$(printf '%s' "$info" | jq -r '.docs_dir')
+    DOCS=${DOCS%/}
+    history=$(printf '%s' "$info" | jq -r '.history')
+    ROUNDS=$(printf '%s\n' "$history" | grep -c '^- [^ ]* [^ ]* UTC submitted for review' || true)
+    LAST_EVENT=$(printf '%s\n' "$history" |
+        grep -E '^- [^ ]* [^ ]* UTC (submitted for review|rework requested|reopened)' |
+        tail -n 1 |
+        sed -E 's/^- [^ ]* [^ ]* UTC //')
+    ROOT=$(find_root) || refuse "no .jig registry found above $PWD"
+}
+
+escape() {
+    printf '%s' "$1" | sed 's/[\\|&]/\\&/g'
+}
+
+render() {
+    sed -e "s|{{ID}}|$(escape "$ID")|g" \
+        -e "s|{{ROUND}}|$(escape "$ROUND")|g" \
+        -e "s|{{LABEL}}|$(escape "$LABEL")|g" \
+        -e "s|{{CREW}}|$(escape "$CREW")|g" \
+        -e "s|{{DOCS}}|$(escape "$DOCS")|g" \
+        -e "s|{{HANDOFF}}|$(escape "$HANDOFF")|g" \
+        -e "s|{{REPORT}}|$(escape "$REPORT")|g" \
+        -e "s|{{DECISION}}|$(escape "$DECISION")|g" \
+        -e "s|{{PREVIOUS}}|$(escape "$PREVIOUS")|g" \
+        "$1"
+}
+
+create() {
+    if [ -e "$ROOT/$2" ]; then
+        printf 'existing'
+    else
+        mkdir -p "$(dirname "$ROOT/$2")"
+        render "$SKILL_DIR/templates/$1" >"$ROOT/$2"
+        printf 'created'
+    fi
+}
+
+fingerprint() {
+    top=$(git rev-parse --show-toplevel 2>/dev/null) || refuse "not inside a git repository"
+    cd "$top" || exit 2
+    head=$(git rev-parse --verify -q HEAD) || head=none
+    base=$head
+    [ "$head" = none ] && base=$(git hash-object -t tree /dev/null)
+    exclude=':(glob,exclude)**/.jig/**'
+    diff=$(git diff --binary "$base" -- . "$exclude" | git hash-object --stdin)
+    untracked=$(git ls-files -z --others --exclude-standard -- . "$exclude" |
+        tr '\0' '\n' |
+        while IFS= read -r path; do
+            printf '%s %s\n' "$(git hash-object -- "$path")" "$path"
+        done |
+        git hash-object --stdin)
+    printf 'HEAD %s diff %s untracked %s\n' "$head" "$(printf '%s' "$diff" | cut -c1-12)" \
+        "$(printf '%s' "$untracked" | cut -c1-12)"
+}
+
+code_state() {
+    if [ ! -f "$ROOT/$HANDOFF" ]; then
+        printf 'WARNING: %s is missing; the developer did not hand over this round.' "$HANDOFF"
+        return
+    fi
+    recorded=$(grep '^Fingerprint: HEAD ' "$ROOT/$HANDOFF" | tail -n 1 | sed 's/^Fingerprint: //')
+    if [ -z "$recorded" ]; then
+        printf 'WARNING: the handoff has no fingerprint; the audited code state is unknown.'
+        return
+    fi
+    current=$(cd "$ROOT" && fingerprint)
+    if [ "$recorded" = "$current" ]; then
+        printf 'matches the handoff (%s)' "$current"
+    else
+        printf 'WARNING: CHANGED since the handoff.\n  handoff: %s\n  now:     %s' "$recorded" "$current"
+    fi
+}
+
+header() {
+    printf 'Role:  %s\n' "$1"
+    printf 'Issue: %s (%s)\n' "$ID" "$STATUS"
+    printf 'Round: %s\n' "$ROUND"
+    printf 'Root:  %s (paths below are relative to it)\n' "$ROOT"
+}
+
+instructions() {
+    printf '\n--- instructions ---\n\n'
+    for file in "$@"; do
+        render "$SKILL_DIR/roles/$file"
+        printf '\n'
+    done
+}
+
+PREVIOUS=none
+HANDOFF=none
+REPORT=none
+DECISION=none
+
+role_dev() {
+    [ $# -eq 2 ] || refuse "usage: crew dev ID LABEL" "Give the developer a label, e.g. claude-dev."
+    LABEL=$2
+    check_label "$LABEL"
+    load "$1"
+    case $STATUS in
+        open)
+            claimed=$(jig claim "$ID" --by "$LABEL") || exit 2
+            load "$ID"
+            ;;
+        claimed) ;;
+        review)
+            refuse "$ID is in review: the code is frozen until the lead returns it with rework." \
+                "Wait for the decision of $(round_name "$ROUNDS")."
+            ;;
+        proposed)
+            refuse "$ID is proposed: a person approves it first (jig approve $ID)."
+            ;;
+        *)
+            refuse "$ID is $STATUS: there is no work to do."
+            ;;
+    esac
+    if [ -z "$ASSIGNEE" ]; then
+        refuse "$ID is claimed without a label." \
+            "A person decides whether to take it over: jig unclaim $ID, then run crew again."
+    fi
+    if [ "$ASSIGNEE" != "$LABEL" ]; then
+        refuse "$ID is claimed by $ASSIGNEE, not by $LABEL."
+    fi
+    ROUND=$(printf '%02d' $((ROUNDS + 1)))
+    HANDOFF="$DOCS/review/round-$ROUND/handoff.md"
+    case $LAST_EVENT in
+        'rework requested'*)
+            MODE=fixes
+            DECISION="$DOCS/review/$(round_name "$ROUNDS")/decision.md"
+            [ -f "$ROOT/$DECISION" ] || DECISION="none (read the rework reason in jig show $ID)"
+            ;;
+        *)
+            MODE=new
+            ;;
+    esac
+    state=$(create handoff.md "$HANDOFF")
+    header "developer ($LABEL)"
+    [ -n "${claimed:-}" ] && printf 'Claim: %s\n' "$claimed"
+    if [ "$MODE" = fixes ]; then
+        printf 'Mode:  fixes after %s\n' "$(round_name "$ROUNDS")"
+        printf 'Read:  %s\n' "$DECISION"
+        printf '       jig show %s (the contract)\n' "$ID"
+    else
+        printf 'Mode:  new work\n'
+        printf 'Read:  jig show %s (the contract)\n' "$ID"
+    fi
+    printf 'Write: %s (%s)\n' "$HANDOFF" "$state"
+    instructions common.md dev.md
+}
+
+role_audit() {
+    cross=no
+    [ $# -eq 3 ] && [ "$3" = --cross-check ] && cross=yes
+    if [ $# -ne 2 ] && [ "$cross" = no ]; then
+        refuse "usage: crew audit ID LABEL [--cross-check]" "Give the auditor a label, e.g. codex-audit."
+    fi
+    LABEL=$2
+    check_label "$LABEL"
+    [ "$LABEL" = lead ] && refuse "the label lead is reserved for the review lead"
+    load "$1"
+    [ "$STATUS" = review ] ||
+        refuse "$ID is $STATUS: there is nothing to audit (an issue is audited while it is in review)."
+    ROUND=$(printf '%02d' "$ROUNDS")
+    dir="$DOCS/review/round-$ROUND"
+    HANDOFF="$dir/handoff.md"
+    DECISION="$dir/decision.md"
+    REPORT="$dir/audit-$LABEL.md"
+    if [ "$cross" = yes ] && [ ! -f "$ROOT/$DECISION" ]; then
+        refuse "round $ROUND has no decision.md yet: a cross-check reviews the lead's decision."
+    fi
+    if [ "$ROUNDS" -gt 1 ]; then
+        PREVIOUS="$DOCS/review/$(round_name $((ROUNDS - 1)))/decision.md"
+        [ -f "$ROOT/$PREVIOUS" ] || PREVIOUS=none
+    fi
+    state=$(create audit.md "$REPORT")
+    if [ "$cross" = yes ]; then
+        header "auditor ($LABEL), cross-check"
+    else
+        header "auditor ($LABEL)"
+    fi
+    printf 'Code:  %s\n' "$(code_state)"
+    printf 'Read:  jig show %s (the contract)\n' "$ID"
+    printf '       %s\n' "$HANDOFF"
+    [ "$PREVIOUS" != none ] && printf '       %s (previous decision)\n' "$PREVIOUS"
+    if [ "$cross" = yes ]; then
+        printf '       %s\n' "$DECISION"
+        for other in "$ROOT/$dir"/audit-*.md; do
+            [ -f "$other" ] || continue
+            [ "$other" = "$ROOT/$REPORT" ] && continue
+            printf '       %s\n' "$dir/$(basename "$other")"
+        done
+    fi
+    printf 'Write: %s (%s)\n' "$REPORT" "$state"
+    if [ "$cross" = yes ]; then
+        instructions common.md auditing.md cross-check.md
+    else
+        instructions common.md auditing.md audit.md
+    fi
+}
+
+role_lead() {
+    [ $# -eq 1 ] || refuse "usage: crew lead ID"
+    LABEL=lead
+    load "$1"
+    [ "$STATUS" = review ] ||
+        refuse "$ID is $STATUS: a review round is led while the issue is in review."
+    ROUND=$(printf '%02d' "$ROUNDS")
+    dir="$DOCS/review/round-$ROUND"
+    HANDOFF="$dir/handoff.md"
+    REPORT="$dir/audit-lead.md"
+    DECISION="$dir/decision.md"
+    if [ "$ROUNDS" -gt 1 ]; then
+        PREVIOUS="$DOCS/review/$(round_name $((ROUNDS - 1)))/decision.md"
+        [ -f "$ROOT/$PREVIOUS" ] || PREVIOUS=none
+    fi
+    report_state=$(create audit.md "$REPORT")
+    decision_state=$(create decision.md "$DECISION")
+    header "review lead"
+    printf 'Code:  %s\n' "$(code_state)"
+    printf 'Read:  jig show %s (the contract)\n' "$ID"
+    printf '       %s\n' "$HANDOFF"
+    [ "$PREVIOUS" != none ] && printf '       %s (previous decision)\n' "$PREVIOUS"
+    found=no
+    for other in "$ROOT/$dir"/audit-*.md; do
+        [ -f "$other" ] || continue
+        [ "$other" = "$ROOT/$REPORT" ] && continue
+        printf '       %s (auditor report)\n' "$dir/$(basename "$other")"
+        found=yes
+    done
+    [ "$found" = no ] && printf '       (no auditor reports yet)\n'
+    printf 'Write: %s (%s)\n' "$REPORT" "$report_state"
+    printf '       %s (%s)\n' "$DECISION" "$decision_state"
+    instructions common.md auditing.md lead.md
+}
+
+[ $# -ge 1 ] || {
+    usage
+    exit 0
+}
+command=$1
+shift
+case $command in
+    -h | --help | help)
+        usage
+        ;;
+    fingerprint)
+        [ $# -eq 0 ] || refuse "usage: crew fingerprint"
+        command -v git >/dev/null 2>&1 || refuse "git is required but not installed"
+        fingerprint
+        ;;
+    dev)
+        need
+        role_dev "$@"
+        ;;
+    audit)
+        need
+        role_audit "$@"
+        ;;
+    lead)
+        need
+        role_lead "$@"
+        ;;
+    *)
+        usage >&2
+        refuse "unknown role \"$command\""
+        ;;
+esac

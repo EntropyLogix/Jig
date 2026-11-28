@@ -33,9 +33,7 @@ impl Drop for TestDir {
 }
 
 fn dir(name: &str) -> TestDir {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tmp")
-        .join("tests");
+    let base = std::env::temp_dir().join("jig-tests");
     fs::create_dir_all(&base).unwrap();
     loop {
         let n = N.fetch_add(1, Ordering::SeqCst);
@@ -4942,5 +4940,169 @@ fn grouped_and_flat_lists(s: &Seeded) {
     assert_eq!(
         String::from_utf8_lossy(&o.stderr),
         "jig: invalid status filter \"active\"; expected proposed|open|claimed|review|closed|all\n"
+    );
+}
+
+fn crew(dir: &Path, args: &[&str]) -> Output {
+    let bin = Path::new(env!("CARGO_BIN_EXE_jig")).parent().unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    Command::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("crew/bin/crew"))
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("XDG_STATE_HOME", dir.join("xdg"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+fn crew_ok(dir: &Path, args: &[&str]) -> String {
+    let o = crew(dir, args);
+    assert!(
+        o.status.success(),
+        "crew {args:?} failed: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let out = String::from_utf8(o.stdout).unwrap();
+    assert!(
+        !out.contains("{{"),
+        "crew {args:?} left a placeholder:\n{out}"
+    );
+    out
+}
+
+fn crew_refused(dir: &Path, args: &[&str], message: &str) {
+    let o = crew(dir, args);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(2), "crew {args:?} must refuse: {err}");
+    assert!(o.stdout.is_empty(), "crew {args:?} refused with stdout");
+    assert!(
+        err.contains(message),
+        "crew {args:?}: {err:?} lacks {message:?}"
+    );
+}
+
+#[test]
+fn crew_review_loop() {
+    for tool in ["git", "jq"] {
+        assert!(
+            Command::new(tool).arg("--version").output().is_ok(),
+            "crew needs {tool} on PATH"
+        );
+    }
+    let d = dir("crew");
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    fs::write(d.join("code.txt"), "a\n").unwrap();
+    git(&["add", "code.txt"]);
+    git(&["commit", "-qm", "init"]);
+    ok(&d, &["init", "--no-hooks"]);
+    let id = add(&d, "Crew issue");
+    let sub = d.join("sub");
+    fs::create_dir(&sub).unwrap();
+    let round = |n: u32| format!(".jig/docs/{id}/review/round-{n:02}");
+    let roles = [
+        ("developer", "# Role: developer"),
+        ("auditor", "# Role: auditor\n"),
+        ("cross-check", "# Role: auditor, cross-check"),
+        ("lead", "# Role: review lead"),
+    ];
+    let only_role = |out: &str, role: &str| {
+        for (name, heading) in roles {
+            assert_eq!(
+                out.contains(heading),
+                name == role,
+                "{role} output and the {name} instructions:\n{out}"
+            );
+        }
+        assert!(out.contains("# jig-crew: rules for every role"));
+        assert_eq!(out.contains("# Auditing rules"), role != "developer");
+    };
+
+    crew_refused(&sub, &["dev", &id], "usage: crew dev ID LABEL");
+    crew_refused(&sub, &["dev", &id, "bad label"], "invalid label");
+    crew_refused(&sub, &["audit", &id, "a1"], "nothing to audit");
+    crew_refused(&sub, &["lead", &id], "is open");
+
+    let out = crew_ok(&sub, &["dev", &id, "dev1"]);
+    only_role(&out, "developer");
+    assert!(out.contains("Mode:  new work"), "{out}");
+    assert!(out.contains(&format!("Write: {}/handoff.md (created)", round(1))));
+    assert_eq!(show_value(&d, &id)["assignee"], "dev1");
+    crew_refused(&sub, &["dev", &id, "dev2"], "claimed by dev1, not by dev2");
+
+    fs::write(d.join("code.txt"), "b\n").unwrap();
+    let fingerprint = crew_ok(&sub, &["fingerprint"]);
+    assert!(fingerprint.starts_with("HEAD "), "{fingerprint}");
+    let handoff = d.join(round(1)).join("handoff.md");
+    let text = fs::read_to_string(&handoff).unwrap();
+    let text: Vec<String> = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("Fingerprint:") {
+                format!("Fingerprint: {}", fingerprint.trim())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    fs::write(&handoff, text.join("\n")).unwrap();
+    ok(&d, &["review", &id, "--summary", "round 01: done"]);
+    crew_refused(&sub, &["dev", &id, "dev1"], "code is frozen");
+    crew_refused(
+        &sub,
+        &["audit", &id, "a1", "--cross-check"],
+        "no decision.md yet",
+    );
+    crew_refused(&sub, &["audit", &id, "lead"], "reserved");
+
+    let out = crew_ok(&sub, &["audit", &id, "a1"]);
+    only_role(&out, "auditor");
+    assert!(out.contains("Code:  matches the handoff"), "{out}");
+    assert!(out.contains(&format!("Write: {}/audit-a1.md (created)", round(1))));
+    assert!(crew_ok(&sub, &["audit", &id, "a1"]).contains("audit-a1.md (existing)"));
+
+    fs::write(d.join("new.txt"), "x\n").unwrap();
+    let changed = crew_ok(&sub, &["audit", &id, "a2"]);
+    assert!(
+        changed.contains("WARNING: CHANGED since the handoff"),
+        "{changed}"
+    );
+    fs::remove_file(d.join("new.txt")).unwrap();
+
+    let out = crew_ok(&sub, &["lead", &id]);
+    only_role(&out, "lead");
+    assert!(out.contains("Code:  matches the handoff"), "{out}");
+    for report in ["audit-a1.md", "audit-a2.md"] {
+        assert!(out.contains(&format!("{}/{report} (auditor report)", round(1))));
+    }
+    assert!(out.contains(&format!(
+        "jig rework {id} --reason \"round 01: see {}/decision.md\"",
+        round(1)
+    )));
+    let out = crew_ok(&sub, &["audit", &id, "a3", "--cross-check"]);
+    only_role(&out, "cross-check");
+    assert!(out.contains(&format!("{}/decision.md", round(1))));
+
+    ok(&d, &["rework", &id, "--reason", "round 01: see decision"]);
+    let out = crew_ok(&sub, &["dev", &id, "dev1"]);
+    assert!(out.contains("Mode:  fixes after round-01"), "{out}");
+    assert!(out.contains(&format!("Read:  {}/decision.md", round(1))));
+    assert!(out.contains(&format!("Write: {}/handoff.md (created)", round(2))));
+    assert!(out.contains("round 02: <one line>"));
+    ok(&d, &["review", &id, "--summary", "round 02: fixed"]);
+    let out = crew_ok(&sub, &["audit", &id, "a1"]);
+    assert!(out.contains(&format!("{}/decision.md (previous decision)", round(1))));
+    assert!(
+        out.contains("WARNING: the handoff has no fingerprint"),
+        "{out}"
     );
 }

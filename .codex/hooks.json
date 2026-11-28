@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jig start --hook-json",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

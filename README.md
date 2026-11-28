@@ -335,6 +335,15 @@ The hook payload is the static `jig start` workflow text wrapped as
 It reads no issue or memory contents, takes no lock, and runs no other
 executables.
 
+## Optional: jig-crew
+
+[`crew/`](crew/) is an optional skill for Claude Code and Codex that runs a
+review loop on top of Jig: a developer implements an issue, auditors check
+it independently, and a review lead merges their reports into one decision
+for the developer. It uses only Jig's statuses, history, and issue
+documents; the `jig` binary does not depend on it. See
+[`crew/README.md`](crew/README.md).
+
 ## Issue file format
 
 Each issue is `<id>.md` under `.jig/open` or `.jig/closed`: a `---`-delimited
@@ -359,6 +368,8 @@ byte-for-byte.
   people using the project choose when and how to synchronize `.jig/`.
 
 ## Development
+
+The tests need `git` and `jq` on `PATH` (the `crew` loop test uses them).
 
 ```sh
 cargo fmt --all -- --check
