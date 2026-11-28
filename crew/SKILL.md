@@ -1,7 +1,7 @@
 ---
 name: jig-crew
-description: Runs one role of the jig-crew review loop (dev, audit, lead) for a Jig issue. Use only when the person invokes jig-crew explicitly.
-argument-hint: "dev ID LABEL | audit ID LABEL [--cross-check] | lead ID"
+description: Runs one role of the jig-crew loop (architect, dev, audit, lead) for a Jig issue. Use only when the person invokes jig-crew explicitly.
+argument-hint: "architect ID | dev ID LABEL | audit ID LABEL [--cross-check] | lead ID"
 disable-model-invocation: true
 allowed-tools: Bash(~/.claude/skills/jig-crew/bin/crew:*)
 ---

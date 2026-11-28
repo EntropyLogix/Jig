@@ -14,6 +14,7 @@ Usage:
   crew dev ID LABEL                     developer: implement or fix the issue
   crew audit ID LABEL [--cross-check]   auditor: audit the current review round
   crew lead ID                          review lead: merge the round into a decision
+  crew architect ID                     architect: turn a proposal into a contract
   crew fingerprint                      print the code fingerprint for a handoff
 
 LABEL names the agent (letters, digits, '.', '_', '-'), e.g. claude-dev.
@@ -67,6 +68,8 @@ load() {
     ASSIGNEE=$(printf '%s' "$info" | jq -r '.assignee // ""')
     DOCS=$(printf '%s' "$info" | jq -r '.docs_dir')
     DOCS=${DOCS%/}
+    PARENT=$(printf '%s' "$info" | jq -r '.parent // ""')
+    NOTES=$(printf '%s' "$info" | jq -r '.notes')
     history=$(printf '%s' "$info" | jq -r '.history')
     ROUNDS=$(printf '%s\n' "$history" | grep -c '^- [^ ]* [^ ]* UTC submitted for review' || true)
     LAST_EVENT=$(printf '%s\n' "$history" |
@@ -90,6 +93,7 @@ render() {
         -e "s|{{REPORT}}|$(escape "$REPORT")|g" \
         -e "s|{{DECISION}}|$(escape "$DECISION")|g" \
         -e "s|{{PREVIOUS}}|$(escape "$PREVIOUS")|g" \
+        -e "s|{{ARCHITECTURE}}|$(escape "$ARCHITECTURE_DOC")|g" \
         "$1"
 }
 
@@ -139,10 +143,49 @@ code_state() {
     fi
 }
 
+architect_note() {
+    printf '%s\n' "$1" | grep '^- [^ ]* [^ ]* UTC architect: ' | tail -n 1 | sed -E 's/^- ([^ ]* [^ ]*) UTC architect: /\1: /'
+}
+
+lineage() {
+    ARCHITECTURES=
+    ARCHITECT=
+    [ -f "$ROOT/$DOCS/architecture.md" ] && ARCHITECTURES="$DOCS/architecture.md (architecture)"
+    note=$(architect_note "$NOTES")
+    [ -n "$note" ] && ARCHITECT="$ID $note"
+    ancestor=$PARENT
+    while [ -n "$ancestor" ]; do
+        ancestor_info=$(jig show "$ancestor" --json 2>/dev/null) || break
+        ancestor_docs=$(printf '%s' "$ancestor_info" | jq -r '.docs_dir')
+        ancestor_docs=${ancestor_docs%/}
+        if [ -f "$ROOT/$ancestor_docs/architecture.md" ]; then
+            entry="$ancestor_docs/architecture.md (architecture of $ancestor)"
+            if [ -n "$ARCHITECTURES" ]; then
+                ARCHITECTURES="$ARCHITECTURES
+$entry"
+            else
+                ARCHITECTURES=$entry
+            fi
+        fi
+        if [ -z "$ARCHITECT" ]; then
+            note=$(architect_note "$(printf '%s' "$ancestor_info" | jq -r '.notes')")
+            [ -n "$note" ] && ARCHITECT="$ancestor $note"
+        fi
+        ancestor=$(printf '%s' "$ancestor_info" | jq -r '.parent // ""')
+    done
+}
+
+print_architectures() {
+    [ -n "$ARCHITECTURES" ] || return 0
+    printf '%s\n' "$ARCHITECTURES" | while IFS= read -r line; do
+        printf '       %s\n' "$line"
+    done
+}
+
 header() {
     printf 'Role:  %s\n' "$1"
     printf 'Issue: %s (%s)\n' "$ID" "$STATUS"
-    printf 'Round: %s\n' "$ROUND"
+    [ -n "$ROUND" ] && printf 'Round: %s\n' "$ROUND"
     printf 'Root:  %s (paths below are relative to it)\n' "$ROOT"
 }
 
@@ -155,6 +198,8 @@ instructions() {
 }
 
 PREVIOUS=none
+ARCHITECTURE_DOC=none
+ROUND=
 HANDOFF=none
 REPORT=none
 DECISION=none
@@ -201,8 +246,14 @@ role_dev() {
             ;;
     esac
     state=$(create handoff.md "$HANDOFF")
+    lineage
     header "developer ($LABEL)"
     [ -n "${claimed:-}" ] && printf 'Claim: %s\n' "$claimed"
+    if [ -n "$ARCHITECT" ]; then
+        printf 'Architect: reviewed (%s)\n' "$ARCHITECT"
+    else
+        printf 'Architect: not reviewed\n'
+    fi
     if [ "$MODE" = fixes ]; then
         printf 'Mode:  fixes after %s\n' "$(round_name "$ROUNDS")"
         printf 'Read:  %s\n' "$DECISION"
@@ -211,6 +262,7 @@ role_dev() {
         printf 'Mode:  new work\n'
         printf 'Read:  jig show %s (the contract)\n' "$ID"
     fi
+    print_architectures
     printf 'Write: %s (%s)\n' "$HANDOFF" "$state"
     instructions common.md dev.md
 }
@@ -223,7 +275,9 @@ role_audit() {
     fi
     LABEL=$2
     check_label "$LABEL"
-    [ "$LABEL" = lead ] && refuse "the label lead is reserved for the review lead"
+    case $LABEL in
+        lead | architect) refuse "the label $LABEL is reserved for its role" ;;
+    esac
     load "$1"
     [ "$STATUS" = review ] ||
         refuse "$ID is $STATUS: there is nothing to audit (an issue is audited while it is in review)."
@@ -240,6 +294,7 @@ role_audit() {
         [ -f "$ROOT/$PREVIOUS" ] || PREVIOUS=none
     fi
     state=$(create audit.md "$REPORT")
+    lineage
     if [ "$cross" = yes ]; then
         header "auditor ($LABEL), cross-check"
     else
@@ -247,6 +302,7 @@ role_audit() {
     fi
     printf 'Code:  %s\n' "$(code_state)"
     printf 'Read:  jig show %s (the contract)\n' "$ID"
+    print_architectures
     printf '       %s\n' "$HANDOFF"
     [ "$PREVIOUS" != none ] && printf '       %s (previous decision)\n' "$PREVIOUS"
     if [ "$cross" = yes ]; then
@@ -282,9 +338,11 @@ role_lead() {
     fi
     report_state=$(create audit.md "$REPORT")
     decision_state=$(create decision.md "$DECISION")
+    lineage
     header "review lead"
     printf 'Code:  %s\n' "$(code_state)"
     printf 'Read:  jig show %s (the contract)\n' "$ID"
+    print_architectures
     printf '       %s\n' "$HANDOFF"
     [ "$PREVIOUS" != none ] && printf '       %s (previous decision)\n' "$PREVIOUS"
     found=no
@@ -298,6 +356,38 @@ role_lead() {
     printf 'Write: %s (%s)\n' "$REPORT" "$report_state"
     printf '       %s (%s)\n' "$DECISION" "$decision_state"
     instructions common.md auditing.md lead.md
+}
+
+role_architect() {
+    [ $# -eq 1 ] || refuse "usage: crew architect ID"
+    LABEL=architect
+    load "$1"
+    case $STATUS in
+        proposed) ;;
+        open)
+            refuse "$ID is open: it is already approved for implementation." \
+                "A person returns it for analysis with: jig revise $ID --reason TEXT"
+            ;;
+        *)
+            refuse "$ID is $STATUS: the architect works on proposals, before implementation starts."
+            ;;
+    esac
+    ARCHITECTURE_DOC="$DOCS/architecture.md"
+    state=$(create architecture.md "$ARCHITECTURE_DOC")
+    lineage
+    header "architect"
+    if [ -n "$ARCHITECT" ]; then
+        printf 'Architect: earlier note (%s)\n' "$ARCHITECT"
+    fi
+    printf 'Read:  jig show %s (the proposal)\n' "$ID"
+    printf '       jig tree %s (existing subtasks)\n' "$ID"
+    printf '%s\n' "$ARCHITECTURES" | grep -v '^$' | grep -v -F -x "$ARCHITECTURE_DOC (architecture)" | while IFS= read -r line; do
+        printf '       %s\n' "$line"
+    done
+    printf 'Write: %s (%s)\n' "$ARCHITECTURE_DOC" "$state"
+    printf '       the description of %s (jig update %s --body -)\n' "$ID" "$ID"
+    printf '       subtasks (jig add TITLE --parent %s --body TEXT) and blockers (jig dep add)\n' "$ID"
+    instructions common.md architect.md
 }
 
 [ $# -ge 1 ] || {
@@ -326,6 +416,10 @@ case $command in
     lead)
         need
         role_lead "$@"
+        ;;
+    architect)
+        need
+        role_architect "$@"
         ;;
     *)
         usage >&2

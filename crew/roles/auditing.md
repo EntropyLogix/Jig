@@ -14,10 +14,11 @@ These rules apply to every audit and to the lead's own audit.
   the top of your report and tell the person, then audit the code as it is
   now unless the person tells you to stop.
 - **Against the contract.** Audit against the issue description, the
-  documents it names, and the repository's AGENTS.md and guidelines. The
-  handoff is a list of claims: verify each one yourself by running the named
-  test, reading the assertion line, and running the gate. A claim you could
-  not confirm is a finding.
+  architecture documents listed above, the documents the description
+  names, and the repository's AGENTS.md and guidelines. The handoff is a
+  list of claims: verify each one yourself by running the named test,
+  reading the assertion line, and running the gate. A claim you could not
+  confirm is a finding.
 - **Previous decision.** If a previous decision is listed above, check that
   each of its items is done.
 - **Beyond the handoff.** Look for behavior the contract requires that

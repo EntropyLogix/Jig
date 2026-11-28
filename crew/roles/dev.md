@@ -5,13 +5,23 @@ label and printed the mode.
 
 ## What to work from
 
-- **New work:** the issue description (`jig show {{ID}}`) is the contract.
-  If it is contradictory or incomplete, ask the person before you write
-  code. Do not fill gaps with guesses.
+- **The contract** is the issue description (`jig show {{ID}}`) together
+  with the architecture documents listed under `Read:`, if any. If it is
+  contradictory or incomplete, ask the person before you write code. Do
+  not fill gaps with guesses.
+- **New work:** implement the contract.
 - **Fixes:** `{{DECISION}}` is the complete list of changes for this round.
   Read only that file and the contract. Do not read the auditors' reports
   (`audit-*.md`); they contain points the lead rejected, and acting on them
   undoes the lead's decision.
+- **Large work.** If the `Architect:` line says "not reviewed" and the work
+  looks too large or unclear for one review round, tell the person and ask
+  whether to hand it to the architect first (the person returns it with
+  `jig revise`). Continue if the person says so.
+- **Subtasks.** If the work has clearly separable parts, you may propose
+  them as subtasks (`jig add TITLE --parent {{ID}} --body TEXT`, each with
+  its own contract). They start as proposals for the person to approve.
+  This is a suggestion, not a requirement.
 
 ## While you work
 

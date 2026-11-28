@@ -5014,6 +5014,7 @@ fn crew_review_loop() {
         ("auditor", "# Role: auditor\n"),
         ("cross-check", "# Role: auditor, cross-check"),
         ("lead", "# Role: review lead"),
+        ("architect", "# Role: architect"),
     ];
     let only_role = |out: &str, role: &str| {
         for (name, heading) in roles {
@@ -5024,17 +5025,55 @@ fn crew_review_loop() {
             );
         }
         assert!(out.contains("# jig-crew: rules for every role"));
-        assert_eq!(out.contains("# Auditing rules"), role != "developer");
+        assert_eq!(
+            out.contains("# Auditing rules"),
+            ["auditor", "cross-check", "lead"].contains(&role)
+        );
     };
 
     crew_refused(&sub, &["dev", &id], "usage: crew dev ID LABEL");
     crew_refused(&sub, &["dev", &id, "bad label"], "invalid label");
     crew_refused(&sub, &["audit", &id, "a1"], "nothing to audit");
     crew_refused(&sub, &["lead", &id], "is open");
+    crew_refused(&sub, &["architect", &id], "already approved");
+
+    let proposal = ok(&d, &["add", "Proposal"]).trim().to_string();
+    let out = crew_ok(&sub, &["architect", &proposal]);
+    only_role(&out, "architect");
+    assert!(!out.contains("Round:"), "{out}");
+    let architecture = format!(".jig/docs/{proposal}/architecture.md");
+    assert!(
+        out.contains(&format!("Write: {architecture} (created)")),
+        "{out}"
+    );
+    assert!(d.join(&architecture).is_file());
+    ok(
+        &d,
+        &[
+            "note",
+            &proposal,
+            "--by",
+            "architect",
+            "contract ready: split",
+        ],
+    );
+    let part = ok(&d, &["add", "Part", "--parent", &proposal])
+        .trim()
+        .to_string();
+    ok(&d, &["approve", &proposal]);
+    ok(&d, &["approve", &part]);
+    let out = crew_ok(&sub, &["dev", &part, "dev3"]);
+    assert!(
+        out.contains(&format!("{architecture} (architecture of {proposal})")),
+        "{out}"
+    );
+    assert!(out.contains("Architect: reviewed ("), "{out}");
+    assert!(out.contains("contract ready: split)"), "{out}");
 
     let out = crew_ok(&sub, &["dev", &id, "dev1"]);
     only_role(&out, "developer");
     assert!(out.contains("Mode:  new work"), "{out}");
+    assert!(out.contains("Architect: not reviewed"), "{out}");
     assert!(out.contains(&format!("Write: {}/handoff.md (created)", round(1))));
     assert_eq!(show_value(&d, &id)["assignee"], "dev1");
     crew_refused(&sub, &["dev", &id, "dev2"], "claimed by dev1, not by dev2");
@@ -5063,6 +5102,7 @@ fn crew_review_loop() {
         "no decision.md yet",
     );
     crew_refused(&sub, &["audit", &id, "lead"], "reserved");
+    crew_refused(&sub, &["audit", &id, "architect"], "reserved");
 
     let out = crew_ok(&sub, &["audit", &id, "a1"]);
     only_role(&out, "auditor");
@@ -5157,6 +5197,8 @@ fn crew_install_and_uninstall() {
             "roles/audit.md",
             "roles/cross-check.md",
             "roles/lead.md",
+            "roles/architect.md",
+            "templates/architecture.md",
             "templates/handoff.md",
             "templates/audit.md",
             "templates/decision.md",
