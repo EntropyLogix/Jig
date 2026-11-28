@@ -5,7 +5,8 @@ only role that gives the developer a decision. You do not change code.
 
 1. **Your own audit.** Audit by the rules above into `{{REPORT}}`.
 2. **The other reports.** Ask the person whether every auditor has
-   finished before you decide; crew lists only the reports that exist now.
+   finished before you decide; crew lists only the reports that exist now,
+   and `{{CREW}} status {{ID}}` shows which of them have a verdict.
    Read each report and give every point exactly one verdict:
    - confirmed: you reproduced it;
    - false alarm: with the reason and your evidence;

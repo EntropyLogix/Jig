@@ -15,6 +15,7 @@ Usage:
   crew audit ID LABEL [--cross-check]   auditor: audit the current review round
   crew audit ID --lead                  lead auditor: merge the round into a decision
   crew architect ID                     architect: turn a proposal into a contract
+  crew status ID                        list review rounds, reports, and decisions
   crew fingerprint                      print the code fingerprint for a handoff
 
 LABEL names the agent (letters, digits, '.', '_', '-'), e.g. claude-dev.
@@ -105,6 +106,26 @@ create() {
         render "$SKILL_DIR/templates/$1" >"$ROOT/$2"
         printf 'created'
     fi
+}
+
+verdict() {
+    found=$(awk '/^## Verdict[[:space:]]*$/ { on = 1; next } on && /^## / { exit } on && NF { print; exit }' "$1")
+    case $found in
+        '' | 'changes needed | accepted') printf 'in progress' ;;
+        *) printf '%s' "$found" ;;
+    esac
+}
+
+described() {
+    if [ "$1" = existing ]; then
+        printf 'existing, verdict: %s' "$(verdict "$2")"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+modified() {
+    date -r "$1" '+%Y-%m-%d %H:%M'
 }
 
 fingerprint() {
@@ -317,7 +338,7 @@ role_audit() {
             printf '       %s\n' "$dir/$(basename "$other")"
         done
     fi
-    printf 'Write: %s (%s)\n' "$REPORT" "$state"
+    printf 'Write: %s (%s)\n' "$REPORT" "$(described "$state" "$ROOT/$REPORT")"
     if [ "$cross" = yes ]; then
         instructions common.md auditing.md cross-check.md
     else
@@ -356,9 +377,46 @@ role_lead() {
         found=yes
     done
     [ "$found" = no ] && printf '       (no auditor reports yet)\n'
-    printf 'Write: %s (%s)\n' "$REPORT" "$report_state"
-    printf '       %s (%s)\n' "$DECISION" "$decision_state"
+    printf 'Write: %s (%s)\n' "$REPORT" "$(described "$report_state" "$ROOT/$REPORT")"
+    printf '       %s (%s)\n' "$DECISION" "$(described "$decision_state" "$ROOT/$DECISION")"
     instructions common.md auditing.md lead.md
+}
+
+role_status() {
+    [ $# -eq 1 ] || refuse "usage: crew status ID"
+    load "$1"
+    printf 'Issue: %s (%s' "$ID" "$STATUS"
+    [ -n "$ASSIGNEE" ] && printf ', %s' "$ASSIGNEE"
+    printf ')\n'
+    if [ "$ROUNDS" -eq 0 ]; then
+        printf 'No review rounds yet.\n'
+        return
+    fi
+    n=1
+    while [ "$n" -le "$ROUNDS" ]; do
+        dir="$DOCS/review/$(round_name "$n")"
+        printf '\nRound %02d: %s\n' "$n" "$dir"
+        if [ -f "$ROOT/$dir/handoff.md" ]; then
+            printf '  handoff: %s\n' "$(modified "$ROOT/$dir/handoff.md")"
+        else
+            printf '  handoff: missing\n'
+        fi
+        found=no
+        for report in "$ROOT/$dir"/audit-*.md; do
+            [ -f "$report" ] || continue
+            label=$(basename "$report" .md)
+            label=${label#audit-}
+            printf '  report %s: %s, %s\n' "$label" "$(verdict "$report")" "$(modified "$report")"
+            found=yes
+        done
+        [ "$found" = no ] && printf '  reports: none\n'
+        if [ -f "$ROOT/$dir/decision.md" ]; then
+            printf '  decision: %s, %s\n' "$(verdict "$ROOT/$dir/decision.md")" "$(modified "$ROOT/$dir/decision.md")"
+        else
+            printf '  decision: none\n'
+        fi
+        n=$((n + 1))
+    done
 }
 
 role_architect() {
@@ -419,6 +477,10 @@ case $command in
     architect)
         need
         role_architect "$@"
+        ;;
+    status)
+        need
+        role_status "$@"
         ;;
     *)
         usage >&2

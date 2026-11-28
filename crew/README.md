@@ -20,6 +20,13 @@ uses statuses, the history, notes, and the issue's documents directory.
 
 In Codex, start a role with `$blt-crew dev ID claude-dev` and so on.
 
+`/blt-crew status ID` shows every round so far: whether the developer
+handed it over, each audit report with its verdict, and the decision. A
+report or decision counts as finished once its `## Verdict` section is
+filled in; until then it shows as in progress. Running a role again with a
+label that already has a report reopens that report and prints its verdict,
+so the same command continues the same audit.
+
 The architect works only on `proposed` issues and writes no code: it
 rewrites the description as the contract, keeps the analysis in
 `.blt/docs/KEY/architecture.md`, may split the work into subtasks, and
@@ -66,11 +73,12 @@ explicitly (`disable-model-invocation` for Claude Code,
 - `SKILL.md`: entry point for both clients.
 - `bin/crew`: checks the issue's status and the label, computes the round,
   creates the round's files from `templates/`, verifies the code
-  fingerprint, and prints the instructions of exactly one role.
+  fingerprint, and prints the instructions of exactly one role, or the
+  status of the rounds.
 - `roles/`: `common.md` for every role, `auditing.md` for auditors and the
   lead, and one file per role.
 - `templates/`: `architecture.md`, `handoff.md`, `audit.md`, `decision.md`.
 
 `bin/crew` can also be run directly: `crew architect ID`, `crew dev ID LABEL`,
 `crew audit ID LABEL [--cross-check]`, `crew audit ID --lead`,
-`crew fingerprint`.
+`crew status ID`, `crew fingerprint`.

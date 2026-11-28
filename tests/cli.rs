@@ -5202,6 +5202,11 @@ fn crew_review_loop() {
     crew_refused(&sub, &["dev", &id, "bad label"], "invalid label");
     crew_refused(&sub, &["audit", &id, "a1"], "nothing to audit");
     crew_refused(&sub, &["audit", &id, "--lead"], "is open");
+    crew_refused(&sub, &["status"], "usage: crew status ID");
+    assert_eq!(
+        crew_ok(&sub, &["status", &id]),
+        format!("Issue: {id} (open)\nNo review rounds yet.\n")
+    );
     crew_refused(&sub, &["lead", &id], "unknown role");
     crew_refused(&sub, &["architect", &id], "already approved");
 
@@ -5276,7 +5281,10 @@ fn crew_review_loop() {
     only_role(&out, "auditor");
     assert!(out.contains("Code:  matches the handoff"), "{out}");
     assert!(out.contains(&format!("Write: {}/audit-a1.md (created)", round(1))));
-    assert!(crew_ok(&sub, &["audit", &id, "a1"]).contains("audit-a1.md (existing)"));
+    assert!(
+        crew_ok(&sub, &["audit", &id, "a1"])
+            .contains("audit-a1.md (existing, verdict: in progress)")
+    );
 
     fs::write(d.join("new.txt"), "x\n").unwrap();
     let changed = crew_ok(&sub, &["audit", &id, "a2"]);
@@ -5285,6 +5293,28 @@ fn crew_review_loop() {
         "{changed}"
     );
     fs::remove_file(d.join("new.txt")).unwrap();
+
+    let status = crew_ok(&sub, &["status", &id]);
+    assert!(
+        status.contains(&format!("Round 01: {}\n", round(1))),
+        "{status}"
+    );
+    assert!(status.contains("  report a1: in progress, "), "{status}");
+    assert!(status.contains("  report a2: in progress, "), "{status}");
+    assert!(status.contains("  decision: none\n"), "{status}");
+    assert!(!status.contains("handoff: missing"), "{status}");
+    let a1 = d.join(format!("{}/audit-a1.md", round(1)));
+    let text = fs::read_to_string(&a1).unwrap();
+    fs::write(
+        &a1,
+        text.replace("## Verdict\n", "## Verdict\n\nchanges needed\n"),
+    )
+    .unwrap();
+    assert!(crew_ok(&sub, &["status", &id]).contains("  report a1: changes needed, "));
+    assert!(
+        crew_ok(&sub, &["audit", &id, "a1"])
+            .contains("audit-a1.md (existing, verdict: changes needed)")
+    );
 
     let out = crew_ok(&sub, &["audit", &id, "--lead"]);
     only_role(&out, "lead");
@@ -5307,6 +5337,14 @@ fn crew_review_loop() {
     assert!(out.contains(&format!("Write: {}/handoff.md (created)", round(2))));
     assert!(out.contains("round 02: <one line>"));
     ok(&d, &["review", &id, "--summary", "round 02: fixed"]);
+    let status = crew_ok(&sub, &["status", &id]);
+    assert!(status.contains("  decision: in progress, "), "{status}");
+    assert!(status.contains("  report lead: in progress, "), "{status}");
+    assert!(
+        status.contains(&format!("Round 02: {}\n  handoff: 20", round(2)))
+            && status.ends_with("\n  reports: none\n  decision: none\n"),
+        "{status}"
+    );
     let out = crew_ok(&sub, &["audit", &id, "a1"]);
     assert!(out.contains(&format!("{}/decision.md (previous decision)", round(1))));
     assert!(

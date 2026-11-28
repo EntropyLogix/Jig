@@ -1,7 +1,7 @@
 ---
 name: blt-crew
-description: Runs one role of the blt-crew loop (architect, dev, audit) for a Billet issue. Use only when the person invokes blt-crew explicitly.
-argument-hint: "architect ID | dev ID LABEL | audit ID LABEL [--cross-check] | audit ID --lead"
+description: Runs one role of the blt-crew loop (architect, dev, audit) or shows its status for a Billet issue. Use only when the person invokes blt-crew explicitly.
+argument-hint: "architect ID | dev ID LABEL | audit ID LABEL [--cross-check] | audit ID --lead | status ID"
 disable-model-invocation: true
 allowed-tools: Bash(~/.claude/skills/blt-crew/bin/crew:*)
 ---
@@ -16,7 +16,8 @@ In Codex the command is `~/.agents/skills/blt-crew/bin/crew`, for example
 `~/.agents/skills/blt-crew/bin/crew audit B12 codex-1`. Do not use the
 `~/.claude` path from the line above.
 
-Follow the instructions in the crew output. They define your role, the
+For `status`, show the person the crew output as it is and stop.
+Otherwise follow the instructions in the crew output. They define your role, the
 files you read, and the only files you write. If crew printed a `crew:`
 refusal instead, tell the person that message and stop. If the person gave
 no arguments, show them the usage crew printed and stop.

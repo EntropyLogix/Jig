@@ -1,6 +1,6 @@
 [package]
 name = "billet"
-version = "1.0.0"
+version = "1.0.1"
 description = "A file-based issue tracker and project memory for people and coding agents"
 license = "MIT"
 edition = "2024"

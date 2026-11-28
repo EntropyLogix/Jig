@@ -18,10 +18,10 @@ cargo install --path . --locked
 ```
 
 To install a tagged release from GitHub (once the owner has published the
-tag), for example `v1.0.0`:
+tag), for example `v1.0.1`:
 
 ```sh
-cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.0
+cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v1.0.1
 ```
 
 The `blt` binary lands on your Cargo `PATH` (usually `~/.cargo/bin`) and needs
@@ -383,6 +383,9 @@ review loop on top of Billet:
 4. A lead auditor merges the reports into one decision. On `blt rework` the
    developer works only from that decision, and the loop repeats.
 5. A person closes the issue.
+
+`/blt-crew status ID` lists each round's handoff, audit reports with their
+verdicts, and decision.
 
 Crew uses only Billet's statuses, history, notes, and issue documents; the
 `blt` binary does not depend on it. Install it with `crew/install.sh`. See
