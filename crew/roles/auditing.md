@@ -3,7 +3,7 @@
 These rules apply to every audit and to the lead's own audit.
 
 - **Read only.** Do not change code, tests, documentation, configuration,
-  git state, or Jig state in the working tree. Other auditors work on the
+  git state, or Billet state in the working tree. Other auditors work on the
   same tree at the same time, and the developer's fingerprint must keep
   matching. Do not run formatters or other tools that rewrite files. Build
   and test output in ignored directories is fine.

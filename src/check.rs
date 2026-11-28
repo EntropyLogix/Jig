@@ -233,7 +233,7 @@ impl Snapshot {
 }
 
 fn rel(place: Place, name: &std::ffi::OsStr) -> PathBuf {
-    PathBuf::from(".jig").join(place.dir()).join(name)
+    PathBuf::from(".billet").join(place.dir()).join(name)
 }
 
 fn stray_number(text: &str) -> Option<u64> {
@@ -242,15 +242,15 @@ fn stray_number(text: &str) -> Option<u64> {
         .and_then(|value| value.trim().parse().ok())
 }
 
-pub(crate) fn scan(jig: &Path) -> Snapshot {
+pub(crate) fn scan(billet: &Path) -> Snapshot {
     let mut reserved = Vec::new();
     let mut records = Vec::new();
     let mut problems = Vec::new();
     let mut claimants: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     let mut parse_failures: Vec<(String, PathBuf)> = Vec::new();
     for place in [Place::Open, Place::Closed] {
-        let dir = jig.join(place.dir());
-        let rel_dir = PathBuf::from(".jig").join(place.dir());
+        let dir = billet.join(place.dir());
+        let rel_dir = PathBuf::from(".billet").join(place.dir());
         match store::metadata_cause(&dir, true) {
             Ok(Some(_)) => {}
             Ok(None) => continue,
@@ -305,7 +305,7 @@ pub(crate) fn scan(jig: &Path) -> Snapshot {
                     ProblemKind::TemporaryFile,
                     path,
                     "abandoned temporary file",
-                    "remove it after checking no jig process is running",
+                    "remove it after checking no blt process is running",
                 ));
                 continue;
             }
@@ -564,12 +564,12 @@ fn dependency_cycles(snap: &Snapshot, names: &Names) -> Vec<Problem> {
                     display.push_str(&names.name(&first));
                     problems.push(Problem::at(
                         ProblemKind::DependencyCycle,
-                        PathBuf::from(".jig")
+                        PathBuf::from(".billet")
                             .join(Place::of(graph[first.as_str()].status).dir())
                             .join(format!("{first}.md")),
                         format!("dependency cycle {display}"),
                         format!(
-                            "remove one edge, e.g. `jig dep rm {} {}`",
+                            "remove one edge, e.g. `blt dep rm {} {}`",
                             names.name(&last),
                             names.name(&first)
                         ),
@@ -588,8 +588,8 @@ fn dependency_cycles(snap: &Snapshot, names: &Names) -> Vec<Problem> {
     problems
 }
 
-fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
-    let docs = jig.join("docs");
+fn issue_docs_problems(billet: &Path, snap: &Snapshot) -> Vec<Problem> {
+    let docs = billet.join("docs");
     let mut problems = Vec::new();
     let metadata = match store::metadata_cause(&docs, true) {
         Ok(Some(_)) => match fs::read_dir(&docs) {
@@ -597,7 +597,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
             Err(error) => {
                 problems.push(Problem::at(
                     ProblemKind::DocsUnlistable,
-                    PathBuf::from(".jig/docs"),
+                    PathBuf::from(".billet/docs"),
                     format!("cannot list directory: {error}"),
                     "fix directory permissions",
                 ));
@@ -608,7 +608,7 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
         Err(error) => {
             problems.push(Problem::at(
                 ProblemKind::DocsDirectory,
-                PathBuf::from(".jig/docs"),
+                PathBuf::from(".billet/docs"),
                 error,
                 "restore a real directory at this path or remove it",
             ));
@@ -626,14 +626,14 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
             Err(error) => {
                 problems.push(Problem::at(
                     ProblemKind::DocsEntryUnlistable,
-                    PathBuf::from(".jig/docs"),
+                    PathBuf::from(".billet/docs"),
                     format!("cannot list entry: {error}"),
                     "fix directory permissions",
                 ));
                 continue;
             }
         };
-        let path = PathBuf::from(".jig/docs").join(entry.file_name());
+        let path = PathBuf::from(".billet/docs").join(entry.file_name());
         let file_name = entry.file_name();
         let name = match file_name.to_str() {
             Some(name) => name,
@@ -686,33 +686,33 @@ fn issue_docs_problems(jig: &Path, snap: &Snapshot) -> Vec<Problem> {
 }
 
 pub fn problem_kinds(root: &Path) -> Vec<(ProblemKind, PathBuf)> {
-    collect(&root.join(".jig"))
+    collect(&root.join(".billet"))
         .into_iter()
         .map(|problem| (problem.kind, problem.path))
         .collect()
 }
 
-pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
-    let snap = scan(jig);
+pub(crate) fn collect(billet: &Path) -> Vec<Problem> {
+    let snap = scan(billet);
     let mut problems = snap.problems.clone();
-    problems.extend(issue_docs_problems(jig, &snap));
+    problems.extend(issue_docs_problems(billet, &snap));
 
-    let rel_config = PathBuf::from(".jig/config.json");
+    let rel_config = PathBuf::from(".billet/config.json");
     let mut prefix = None;
-    match store::metadata_cause(&jig.join(config::FILE), false) {
+    match store::metadata_cause(&billet.join(config::FILE), false) {
         Err(e) => problems.push(Problem::at(
             ProblemKind::ConfigFile,
             rel_config.clone(),
             e,
-            "restore .jig/config.json as a regular file",
+            "restore .billet/config.json as a regular file",
         )),
         Ok(None) => problems.push(Problem::at(
             ProblemKind::ConfigMissing,
             rel_config.clone(),
             "config.json is missing",
-            "run `jig init` to write the default configuration",
+            "run `blt init` to write the default configuration",
         )),
-        Ok(Some(_)) => match config::read(jig) {
+        Ok(Some(_)) => match config::read(billet) {
             Ok(loaded) => prefix = Some(loaded.prefix),
             Err(e) => problems.push(Problem::at(
                 ProblemKind::ConfigInvalid,
@@ -744,7 +744,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                     root.path.clone(),
                     format!("number {}{number} is also used by {others}", names.prefix),
                     format!(
-                        "a person gives one of them an unused number: `jig update {} --number N`",
+                        "a person gives one of them an unused number: `blt update {} --number N`",
                         root.key
                     ),
                 ));
@@ -752,21 +752,21 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
         }
     }
 
-    let rel_mem = PathBuf::from(".jig/memory.md");
-    match store::metadata_cause(&jig.join("memory.md"), false) {
+    let rel_mem = PathBuf::from(".billet/memory.md");
+    match store::metadata_cause(&billet.join("memory.md"), false) {
         Err(e) => problems.push(Problem::at(
             ProblemKind::MemoryFile,
             rel_mem,
             e,
-            "restore memory.md as a regular file or run `jig init`",
+            "restore memory.md as a regular file or run `blt init`",
         )),
         Ok(None) => problems.push(Problem::at(
             ProblemKind::MemoryMissing,
             rel_mem,
             "memory.md is missing",
-            "run `jig init` to create it",
+            "run `blt init` to create it",
         )),
-        Ok(Some(_)) => match fs::read_to_string(jig.join("memory.md")) {
+        Ok(Some(_)) => match fs::read_to_string(billet.join("memory.md")) {
             Err(e) => problems.push(Problem::at(
                 ProblemKind::MemoryUnreadable,
                 rel_mem,
@@ -786,28 +786,28 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
         },
     }
 
-    let rel_gi = PathBuf::from(".jig/.gitignore");
+    let rel_gi = PathBuf::from(".billet/.gitignore");
     const LEGACY: &str = "/.*.tmp-*";
     const RULE: &str = ".*.tmp-*";
-    match store::metadata_cause(&jig.join(".gitignore"), false) {
+    match store::metadata_cause(&billet.join(".gitignore"), false) {
         Err(e) => problems.push(Problem::at(
             ProblemKind::GitignoreFile,
             rel_gi,
             e,
-            "restore .jig/.gitignore as a regular file",
+            "restore .billet/.gitignore as a regular file",
         )),
         Ok(None) => problems.push(Problem::at(
             ProblemKind::GitignoreMissing,
             rel_gi,
             ".gitignore is missing",
-            format!("add the line `{RULE}` to .jig/.gitignore"),
+            format!("add the line `{RULE}` to .billet/.gitignore"),
         )),
-        Ok(Some(_)) => match fs::read_to_string(jig.join(".gitignore")) {
+        Ok(Some(_)) => match fs::read_to_string(billet.join(".gitignore")) {
             Err(e) => problems.push(Problem::at(
                 ProblemKind::GitignoreUnreadable,
                 rel_gi,
                 format!("cannot read: {e}"),
-                "fix file permissions or restore .jig/.gitignore",
+                "fix file permissions or restore .billet/.gitignore",
             )),
             Ok(text) => {
                 if text.lines().any(|l| l == LEGACY) {
@@ -815,14 +815,14 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                         ProblemKind::GitignoreLegacyRule,
                         rel_gi,
                         format!("legacy `{LEGACY}` rule does not ignore nested temporary files"),
-                        format!("replace `{LEGACY}` with `{RULE}` in .jig/.gitignore"),
+                        format!("replace `{LEGACY}` with `{RULE}` in .billet/.gitignore"),
                     ));
                 }
             }
         },
     }
 
-    if let Some((problem, hint)) = instructions::problem(jig.parent().unwrap()) {
+    if let Some((problem, hint)) = instructions::problem(billet.parent().unwrap()) {
         problems.push(Problem::at(
             ProblemKind::AgentInstructions,
             PathBuf::from("AGENTS.md"),
@@ -831,19 +831,19 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
         ));
     }
 
-    match store::inspect_move(jig) {
+    match store::inspect_move(billet) {
         Ok(None) => {}
         Ok(Some(id)) => problems.push(Problem::at(
             ProblemKind::PendingMove,
-            PathBuf::from(".jig/.move"),
+            PathBuf::from(".billet/.move"),
             format!("pending move journal for {id}"),
-            "finish it with any write command in a writable checkout, or resolve .jig/.move manually",
+            "finish it with any write command in a writable checkout, or resolve .billet/.move manually",
         )),
         Err(e) => problems.push(Problem::at(
             ProblemKind::MoveJournal,
-            PathBuf::from(".jig/.move"),
+            PathBuf::from(".billet/.move"),
             e,
-            "resolve .jig/.move manually",
+            "resolve .billet/.move manually",
         )),
     }
 
@@ -877,7 +877,7 @@ pub(crate) fn collect(jig: &Path) -> Vec<Problem> {
                     rec.path.clone(),
                     format!("blocker {}: {}", names.name(dep), e.text(&names)),
                     format!(
-                        "restore the issue file for {} or run `jig dep rm {} {}`",
+                        "restore the issue file for {} or run `blt dep rm {} {}`",
                         names.name(dep),
                         names.name(&rec.issue.id),
                         names.name(dep)

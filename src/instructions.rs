@@ -4,34 +4,34 @@ use std::fs;
 use std::path::Path;
 
 const VERSION: u32 = 1;
-const BEGIN: &str = "<!-- BEGIN JIG v:";
-const END: &str = "<!-- END JIG -->";
+const BEGIN: &str = "<!-- BEGIN BILLET v:";
+const END: &str = "<!-- END BILLET -->";
 
 macro_rules! text {
     ($heading:literal) => {
         concat!(
             $heading,
             "\n\n",
-            "This project tracks work with `jig`. Do not keep task lists in other Markdown or TODO files. Your built-in todo or plan tool is only for the steps of the current task; record anything that must outlive this session in `jig`.\n",
-            "If `jig` is not installed, ask a person to install it: `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v",
+            "This project tracks work with `blt`. Do not keep task lists in other Markdown or TODO files. Your built-in todo or plan tool is only for the steps of the current task; record anything that must outlive this session in `blt`.\n",
+            "If `blt` is not installed, ask a person to install it: `cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v",
             env!("CARGO_PKG_VERSION"),
-            "` (https://github.com/EntropyLogix/Jig).\n\n",
-            "- Run `jig start` for the workflow. `jig ready` lists approved, unblocked work; `jig show ID` reads one issue. An issue authorizes only its described scope. Refer to issues by the ID `jig` prints (for example `B12`, subtask `B12.3`), in commands and in messages; a person may give only the number (`12`).\n",
-            "- Claim before working: `jig claim ID --by NAME` with your agent name. Use `--force` only when a person explicitly authorizes it for that issue.\n",
-            "- Submit finished work with `jig review ID --summary TEXT`. Approving, revising, returning for rework and closing issues is for people unless a person explicitly tells you otherwise for that issue.\n",
-            "- Work found along the way: `jig add TITLE --body TEXT` (it starts as a proposal, not work) and `jig note ID TEXT` on the issue where you found it.\n",
-            "- The issue description is the current contract: rewrite it with `jig update ID --body -` as decisions change instead of appending; write long analyses and reports directly in the `Documents:` directory from `jig show ID`, not in other directories.\n",
-            "- Choose the relationship: a part of this issue's work is a subtask (`jig add TITLE --parent ID --body TEXT`); separate work that must happen beforehand is a blocker (`jig dep add ID BLOCKER`). A parent is ready only after its subtasks close; a closed blocker stops blocking without removing the link. If your issue needs other work beforehand, add it as a subtask or blocker, leave a `jig note`, and run `jig unclaim ID`; use `jig dep rm` only to undo your own mistake, with a note.\n",
-            "- Stopping before the work is done: leave a `jig note`; run `jig unclaim ID` if you will not continue.\n",
-            "- Read project facts on demand with `jig recall [TOPIC]`; record durable project facts with `jig remember TOPIC TEXT`. Keep personal preferences in your own memory.\n",
-            "- If `jig ready` warns or lists nothing, run `jig check` and report to a person; never remove dependencies or approve proposals to get unblocked.\n"
+            "` (https://github.com/EntropyLogix/Billet).\n\n",
+            "- Run `blt start` for the workflow. `blt ready` lists approved, unblocked work; `blt show ID` reads one issue. An issue authorizes only its described scope. Refer to issues by the ID `blt` prints (for example `B12`, subtask `B12.3`), in commands and in messages; a person may give only the number (`12`).\n",
+            "- Claim before working: `blt claim ID --by NAME` with your agent name. Use `--force` only when a person explicitly authorizes it for that issue.\n",
+            "- Submit finished work with `blt review ID --summary TEXT`. Approving, revising, returning for rework and closing issues is for people unless a person explicitly tells you otherwise for that issue.\n",
+            "- Work found along the way: `blt add TITLE --body TEXT` (it starts as a proposal, not work) and `blt note ID TEXT` on the issue where you found it.\n",
+            "- The issue description is the current contract: rewrite it with `blt update ID --body -` as decisions change instead of appending; write long analyses and reports directly in the `Documents:` directory from `blt show ID`, not in other directories.\n",
+            "- Choose the relationship: a part of this issue's work is a subtask (`blt add TITLE --parent ID --body TEXT`); separate work that must happen beforehand is a blocker (`blt dep add ID BLOCKER`). A parent is ready only after its subtasks close; a closed blocker stops blocking without removing the link. If your issue needs other work beforehand, add it as a subtask or blocker, leave a `blt note`, and run `blt unclaim ID`; use `blt dep rm` only to undo your own mistake, with a note.\n",
+            "- Stopping before the work is done: leave a `blt note`; run `blt unclaim ID` if you will not continue.\n",
+            "- Read project facts on demand with `blt recall [TOPIC]`; record durable project facts with `blt remember TOPIC TEXT`. Keep personal preferences in your own memory.\n",
+            "- If `blt ready` warns or lists nothing, run `blt check` and report to a person; never remove dependencies or approve proposals to get unblocked.\n"
         )
     };
 }
 
-pub(crate) const WORKFLOW: &str = text!("Jig workflow");
-pub(crate) const MCP_INSTRUCTIONS: &str = "Use these MCP tools instead of running `jig` in the shell. Each tool mirrors the command of the same name. A person's refusal of a tool call is final and is not retried through the shell.";
-const BLOCK: &str = text!("## Issue tracking with Jig");
+pub(crate) const WORKFLOW: &str = text!("Billet workflow");
+pub(crate) const MCP_INSTRUCTIONS: &str = "Use these MCP tools instead of running `blt` in the shell. Each tool mirrors the command of the same name. A person's refusal of a tool call is final and is not retried through the shell.";
+const BLOCK: &str = text!("## Issue tracking with Billet");
 
 fn content_hash(text: &str) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
@@ -67,7 +67,7 @@ fn parse_opener(line: &str) -> Option<(u32, u64)> {
 }
 
 fn marker_candidate(line: &str) -> bool {
-    for prefix in ["<!-- BEGIN JIG", "<!-- END JIG"] {
+    for prefix in ["<!-- BEGIN BILLET", "<!-- END BILLET"] {
         if let Some(rest) = line.trim().strip_prefix(prefix)
             && (rest.is_empty() || rest.starts_with(|c: char| !c.is_alphanumeric()))
         {
@@ -78,7 +78,7 @@ fn marker_candidate(line: &str) -> bool {
 }
 
 fn locate(text: &str) -> Result<Option<ManagedBlock>, String> {
-    let malformed = || "malformed or duplicated Jig instruction markers".to_string();
+    let malformed = || "malformed or duplicated Billet instruction markers".to_string();
     let mut opener: Option<(usize, usize, u32, u64, bool)> = None;
     let mut closer: Option<(usize, usize)> = None;
     let mut offset = 0usize;
@@ -161,18 +161,18 @@ fn existing_problem(block: &ManagedBlock) -> Option<(String, &'static str)> {
     match (block.version.cmp(&VERSION), block.customized) {
         (Ordering::Greater, _) => Some((
             format!(
-                "Jig instructions block version {} is newer than supported version {VERSION}",
+                "Billet instructions block version {} is newer than supported version {VERSION}",
                 block.version
             ),
-            "use a version of jig that understands that block version",
+            "use a version of blt that understands that block version",
         )),
         (Ordering::Less, true) => Some((
-            "customized Jig instructions are outdated".to_string(),
-            "remove the managed block, run `jig init`, and reapply your local edits",
+            "customized Billet instructions are outdated".to_string(),
+            "remove the managed block, run `blt init`, and reapply your local edits",
         )),
         (Ordering::Less, false) => Some((
-            "Jig instructions are outdated".to_string(),
-            "run `jig init` to update the instructions",
+            "Billet instructions are outdated".to_string(),
+            "run `blt init` to update the instructions",
         )),
         (Ordering::Equal, _) => None,
     }
@@ -207,8 +207,8 @@ pub(crate) fn problem(root: &Path) -> Option<(String, &'static str)> {
         Err(e) => return Some((e, "fix AGENTS.md manually")),
         Ok(None) => {
             return Some((
-                "Jig instructions are missing".to_string(),
-                "run `jig init` to add the instructions",
+                "Billet instructions are missing".to_string(),
+                "run `blt init` to add the instructions",
             ));
         }
         Ok(Some(_)) => match fs::read_to_string(&path) {
@@ -219,8 +219,8 @@ pub(crate) fn problem(root: &Path) -> Option<(String, &'static str)> {
     match locate(&text) {
         Err(e) => Some((e, "resolve AGENTS.md manually")),
         Ok(None) => Some((
-            "Jig instructions are missing".to_string(),
-            "run `jig init` to add the instructions",
+            "Billet instructions are missing".to_string(),
+            "run `blt init` to add the instructions",
         )),
         Ok(Some(b)) => existing_problem(&b),
     }
@@ -240,13 +240,13 @@ mod tests {
         );
         let stable = BLOCK.replace(tag, "--tag v<PACKAGE_VERSION>");
         let expected = match VERSION {
-            1 => 0xf63c_9c3f_f77b_3ced,
+            1 => 0x27b4_c308_7532_9de1,
             v => panic!("Record the block fingerprint for VERSION {v}"),
         };
         assert_eq!(
             content_hash(&stable),
             expected,
-            "Changing the Jig instructions requires bumping VERSION and recording the new fingerprint"
+            "Changing the Billet instructions requires bumping VERSION and recording the new fingerprint"
         );
     }
 }

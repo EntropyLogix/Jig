@@ -33,7 +33,7 @@ impl Drop for TestDir {
 }
 
 fn dir(name: &str) -> TestDir {
-    let base = std::env::temp_dir().join("jig-tests");
+    let base = std::env::temp_dir().join("billet-tests");
     fs::create_dir_all(&base).unwrap();
     loop {
         let n = N.fetch_add(1, Ordering::SeqCst);
@@ -47,7 +47,7 @@ fn dir(name: &str) -> TestDir {
 }
 
 fn spawn(dir: &Path, args: &[&str]) -> std::process::Child {
-    Command::new(env!("CARGO_BIN_EXE_jig"))
+    Command::new(env!("CARGO_BIN_EXE_blt"))
         .args(args)
         .current_dir(dir)
         .env("XDG_STATE_HOME", dir.join("xdg"))
@@ -63,7 +63,7 @@ fn run(dir: &Path, args: &[&str]) -> Output {
 }
 
 fn run_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
-    let mut ch = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let mut ch = Command::new(env!("CARGO_BIN_EXE_blt"))
         .args(args)
         .current_dir(dir)
         .env("XDG_STATE_HOME", dir.join("xdg"))
@@ -123,13 +123,13 @@ fn fm(id: &str, status: &str, extra: &str) -> String {
 }
 
 fn render_key(d: &Path, token: &str) -> String {
-    if !jig::issue::valid_key(token) {
+    if !billet::issue::valid_key(token) {
         return token.to_string();
     }
     let root = token.split('.').next().unwrap();
     for place in ["open", "closed"] {
-        if let Ok(text) = fs::read_to_string(d.join(format!(".jig/{place}/{root}.md")))
-            && let Ok(issue) = jig::issue::decode(&text)
+        if let Ok(text) = fs::read_to_string(d.join(format!(".billet/{place}/{root}.md")))
+            && let Ok(issue) = billet::issue::decode(&text)
             && let Some(number) = issue.number
         {
             return format!("B{number}{}", &token[root.len()..]);
@@ -172,7 +172,7 @@ fn key_of(d: &Path, handle: &str) -> String {
 }
 
 fn journal(old: &str, new: &str) -> String {
-    format!("JIG-MOVE-1\n{}\n{}\n{old}{new}", old.len(), new.len())
+    format!("BILLET-MOVE-1\n{}\n{}\n{old}{new}", old.len(), new.len())
 }
 
 #[test]
@@ -180,11 +180,11 @@ fn init_and_nested_discovery() {
     let d = dir("init");
     let proj = d.join("proj");
     fs::create_dir_all(&proj).unwrap();
-    assert_eq!(ok(&proj, &["init"]), "initialized .jig/\n");
-    assert!(proj.join(".jig/open").is_dir());
-    assert!(proj.join(".jig/closed").is_dir());
-    assert!(proj.join(".jig/memory.md").is_file());
-    let gi = fs::read_to_string(proj.join(".jig/.gitignore")).unwrap();
+    assert_eq!(ok(&proj, &["init"]), "initialized .billet/\n");
+    assert!(proj.join(".billet/open").is_dir());
+    assert!(proj.join(".billet/closed").is_dir());
+    assert!(proj.join(".billet/memory.md").is_file());
+    let gi = fs::read_to_string(proj.join(".billet/.gitignore")).unwrap();
     assert!(gi.contains("/.lock") && gi.contains("/.move") && gi.contains(".*.tmp-"));
     assert!(
         gi.lines().any(|s| s == ".*.tmp-*"),
@@ -199,9 +199,9 @@ fn init_and_nested_discovery() {
 
     let e = bad(&deep, &["init"]);
     assert!(e.contains("nest"), "{e}");
-    assert_eq!(ok(&proj, &["init"]), ".jig/ already initialized\n");
+    assert_eq!(ok(&proj, &["init"]), ".billet/ already initialized\n");
 
-    let mem = proj.join(".jig/memory.md");
+    let mem = proj.join(".billet/memory.md");
     let before = fs::read_to_string(&mem).unwrap();
     ok(&proj, &["init"]);
     assert_eq!(fs::read_to_string(&mem).unwrap(), before);
@@ -217,26 +217,26 @@ fn git_boundary_stops_discovery() {
     fs::create_dir_all(&repo).unwrap();
     fs::write(repo.join(".git"), "gitdir: /elsewhere\n").unwrap();
     let e = bad(&repo, &["ready"]);
-    assert!(e.contains("no .jig"), "{e}");
+    assert!(e.contains("no .billet"), "{e}");
     let deep = repo.join("sub");
     fs::create_dir_all(&deep).unwrap();
     let e = bad(&deep, &["ready"]);
-    assert!(e.contains("no .jig"), "{e}");
-    assert_eq!(ok(&repo, &["init"]), "initialized .jig/\n");
+    assert!(e.contains("no .billet"), "{e}");
+    assert_eq!(ok(&repo, &["init"]), "initialized .billet/\n");
 }
 
 #[test]
 fn missing_dirs_are_empty_registry() {
     let d = dir("emptydirs");
     let proj = d.join("proj");
-    fs::create_dir_all(proj.join(".jig")).unwrap();
-    fs::write(proj.join(".jig/memory.md"), "# Project Memory\n").unwrap();
-    fs::write(proj.join(".jig/config.json"), "{\"prefix\": \"B\"}\n").unwrap();
+    fs::create_dir_all(proj.join(".billet")).unwrap();
+    fs::write(proj.join(".billet/memory.md"), "# Project Memory\n").unwrap();
+    fs::write(proj.join(".billet/config.json"), "{\"prefix\": \"B\"}\n").unwrap();
     assert_eq!(ok(&proj, &["ready"]), "");
     let id = add(&proj, "x");
     assert_eq!(id, "B1", "numbering starts at 1");
     let key = key_of(&proj, &id);
-    assert!(proj.join(format!(".jig/open/{key}.md")).is_file());
+    assert!(proj.join(format!(".billet/open/{key}.md")).is_file());
 }
 
 #[test]
@@ -256,10 +256,10 @@ fn concurrent_claim_single_winner() {
         String::from_utf8_lossy(&ob.stderr)
     );
     let key = key_of(&d, &id);
-    let text = fs::read_to_string(d.join(format!(".jig/open/{key}.md"))).unwrap();
+    let text = fs::read_to_string(d.join(format!(".billet/open/{key}.md"))).unwrap();
     assert!(text.contains("status: claimed"));
     assert!(text.contains("claim_id: \""));
-    let i = jig::issue::decode(&text).unwrap();
+    let i = billet::issue::decode(&text).unwrap();
     let who = i.assignee.clone().unwrap();
     assert!(who == "one" || who == "two");
 }
@@ -271,13 +271,13 @@ fn same_name_copies_get_distinct_claim_ids() {
     ok(&d1, &["init"]);
     ok(&d2, &["init"]);
     let shared = fm("1aaaaa", "open", "");
-    fs::write(d1.join(".jig/open/1aaaaa.md"), &shared).unwrap();
-    fs::write(d2.join(".jig/open/1aaaaa.md"), &shared).unwrap();
+    fs::write(d1.join(".billet/open/1aaaaa.md"), &shared).unwrap();
+    fs::write(d2.join(".billet/open/1aaaaa.md"), &shared).unwrap();
     let o1 = ok(&d1, &["claim", "1aaaaa", "--by", "bot"]);
     let o2 = ok(&d2, &["claim", "1aaaaa", "--by", "bot"]);
-    let t1 = fs::read_to_string(d1.join(".jig/open/1aaaaa.md")).unwrap();
-    let t2 = fs::read_to_string(d2.join(".jig/open/1aaaaa.md")).unwrap();
-    let cid = |t: &str| jig::issue::decode(t).unwrap().claim_id.unwrap();
+    let t1 = fs::read_to_string(d1.join(".billet/open/1aaaaa.md")).unwrap();
+    let t2 = fs::read_to_string(d2.join(".billet/open/1aaaaa.md")).unwrap();
+    let cid = |t: &str| billet::issue::decode(t).unwrap().claim_id.unwrap();
     assert_ne!(cid(&t1), cid(&t2));
     assert!(!o1.contains(&cid(&t1)) && !o2.contains(&cid(&t2)));
 }
@@ -320,7 +320,7 @@ fn show_documents_directory_and_files() {
     ok(&d, &["init", "--no-hooks"]);
     let id = add(&d, "documented");
     let key = key_of(&d, &id);
-    let docs_dir = format!(".jig/docs/{key}/");
+    let docs_dir = format!(".billet/docs/{key}/");
 
     let text = ok(&d, &["show", &id]);
     assert!(text.ends_with(&format!("Documents: {docs_dir} (none)\n")));
@@ -328,25 +328,25 @@ fn show_documents_directory_and_files() {
     assert_eq!(json["docs_dir"], docs_dir);
     assert_eq!(json["docs"], json!([]));
 
-    fs::create_dir_all(d.join(format!(".jig/docs/{key}/review"))).unwrap();
-    fs::write(d.join(format!(".jig/docs/{key}/z.md")), "secret").unwrap();
-    fs::write(d.join(format!(".jig/docs/{key}/review/r1.md")), "report").unwrap();
+    fs::create_dir_all(d.join(format!(".billet/docs/{key}/review"))).unwrap();
+    fs::write(d.join(format!(".billet/docs/{key}/z.md")), "secret").unwrap();
+    fs::write(d.join(format!(".billet/docs/{key}/review/r1.md")), "report").unwrap();
     let text = ok(&d, &["show", &id]);
     assert!(text.ends_with(&format!(
-        "Documents: {docs_dir}\n  .jig/docs/{key}/review/r1.md\n  .jig/docs/{key}/z.md\n"
+        "Documents: {docs_dir}\n  .billet/docs/{key}/review/r1.md\n  .billet/docs/{key}/z.md\n"
     )));
     let json: Value = serde_json::from_str(&ok(&d, &["show", &id, "--json"])).unwrap();
     assert_eq!(
         json["docs"],
         json!([
-            format!(".jig/docs/{key}/review/r1.md"),
-            format!(".jig/docs/{key}/z.md")
+            format!(".billet/docs/{key}/review/r1.md"),
+            format!(".billet/docs/{key}/z.md")
         ])
     );
     ok(&d, &["close", &id, "--reason", "done"]);
-    assert!(d.join(format!(".jig/docs/{key}/z.md")).is_file());
+    assert!(d.join(format!(".billet/docs/{key}/z.md")).is_file());
     ok(&d, &["reopen", &id, "--reason", "continue"]);
-    assert!(d.join(format!(".jig/docs/{key}/review/r1.md")).is_file());
+    assert!(d.join(format!(".billet/docs/{key}/review/r1.md")).is_file());
 }
 
 #[test]
@@ -372,7 +372,7 @@ fn stdin_body_does_not_hold_lock() {
     let d = dir("stdlock");
     ok(&d, &["init"]);
     let id = add(&d, "t");
-    let mut writer = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let mut writer = Command::new(env!("CARGO_BIN_EXE_blt"))
         .args(["update", &id, "--body", "-"])
         .current_dir(&d)
         .env("XDG_STATE_HOME", d.join("xdg"))
@@ -416,8 +416,10 @@ fn add_dep_many_preserves_order() {
     .trim()
     .to_string();
     let key = key_of(&d, &id);
-    let i = jig::issue::decode(&fs::read_to_string(d.join(format!(".jig/open/{key}.md"))).unwrap())
-        .unwrap();
+    let i = billet::issue::decode(
+        &fs::read_to_string(d.join(format!(".billet/open/{key}.md"))).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         i.depends_on,
         vec![key_of(&d, &a), key_of(&d, &b), key_of(&d, &c)]
@@ -439,7 +441,7 @@ fn symlink_registry_and_dirs_refuse() {
     add(&real, "target");
     let linked = d.join("linked");
     fs::create_dir(&linked).unwrap();
-    std::os::unix::fs::symlink(real.join(".jig"), linked.join(".jig")).unwrap();
+    std::os::unix::fs::symlink(real.join(".billet"), linked.join(".billet")).unwrap();
     let e = bad(&linked, &["ready"]);
     assert!(e.contains("symbolic link"), "{e}");
     let e = bad(&linked, &["add", "x"]);
@@ -447,17 +449,17 @@ fn symlink_registry_and_dirs_refuse() {
     let e = bad(&linked, &["init"]);
     assert!(e.contains("symbolic link"), "{e}");
     assert_eq!(
-        fs::read_dir(real.join(".jig/open")).unwrap().count(),
+        fs::read_dir(real.join(".billet/open")).unwrap().count(),
         1,
         "linked registry untouched"
     );
 
     let d2 = dir("linkopen");
     ok(&d2, &["init"]);
-    fs::remove_dir(d2.join(".jig/open")).unwrap();
+    fs::remove_dir(d2.join(".billet/open")).unwrap();
     let victim = d2.join("victim");
     fs::create_dir(&victim).unwrap();
-    std::os::unix::fs::symlink(&victim, d2.join(".jig/open")).unwrap();
+    std::os::unix::fs::symlink(&victim, d2.join(".billet/open")).unwrap();
     let e = bad(&d2, &["ready"]);
     assert!(e.contains("symbolic link"), "{e}");
     let e = bad(&d2, &["add", "x"]);
@@ -475,8 +477,8 @@ fn permissions_preserved_on_rewrite() {
     ok(&d, &["init"]);
     let id = add(&d, "p");
     let key = key_of(&d, &id);
-    let open = d.join(format!(".jig/open/{key}.md"));
-    let closed = d.join(format!(".jig/closed/{key}.md"));
+    let open = d.join(format!(".billet/open/{key}.md"));
+    let closed = d.join(format!(".billet/closed/{key}.md"));
     let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
     fs::set_permissions(&open, fs::Permissions::from_mode(0o600)).unwrap();
     ok(&d, &["update", &id, "--title", "p2"]);
@@ -494,7 +496,7 @@ fn stdout_write_failure_exits_one() {
     ok(&d, &["init"]);
     let id = add(&d, "s");
     let devfull = fs::File::options().write(true).open("/dev/full").unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let o = Command::new(env!("CARGO_BIN_EXE_blt"))
         .args(["show", &id, "--json"])
         .current_dir(&d)
         .env("XDG_STATE_HOME", d.join("xdg"))
@@ -511,7 +513,7 @@ fn stdout_write_failure_exits_one() {
 #[test]
 fn init_installs_agent_integrations_idempotently() {
     let standard =
-        json!({"hooks":[{"type":"command","command":"jig start --hook-json","timeout":5}]});
+        json!({"hooks":[{"type":"command","command":"blt start --hook-json","timeout":5}]});
 
     let d = dir("integrations");
     let proj = d.join("proj");
@@ -533,12 +535,12 @@ fn init_installs_agent_integrations_idempotently() {
     let sentinel = "model = \"keepme\"\n";
     fs::write(proj.join(".codex/config.toml"), sentinel).unwrap();
 
-    assert_eq!(ok(&proj, &["init"]), "initialized .jig/\n");
+    assert_eq!(ok(&proj, &["init"]), "initialized .billet/\n");
     let agents = fs::read_to_string(proj.join("AGENTS.md")).unwrap();
     assert!(agents.starts_with(agents_orig), "original bytes preserved");
-    assert_eq!(agents.matches("<!-- BEGIN JIG v:1 hash:").count(), 1);
-    assert_eq!(agents.matches("<!-- END JIG -->").count(), 1);
-    assert!(agents.contains("jig claim ID") && agents.contains("jig recall"));
+    assert_eq!(agents.matches("<!-- BEGIN BILLET v:1 hash:").count(), 1);
+    assert_eq!(agents.matches("<!-- END BILLET -->").count(), 1);
+    assert!(agents.contains("blt claim ID") && agents.contains("blt recall"));
 
     let claude: Value =
         serde_json::from_str(&fs::read_to_string(proj.join(".claude/settings.json")).unwrap())
@@ -663,16 +665,16 @@ fn session_start_hook_payload_is_static_and_read_only() {
         "hook payload must carry only the static workflow"
     );
 
-    let journal = "JIG-MOVE-1\n18446744073709551615\n2\nxy";
-    fs::write(d.join(".jig/.move"), journal).unwrap();
+    let journal = "BILLET-MOVE-1\n18446744073709551615\n2\nxy";
+    fs::write(d.join(".billet/.move"), journal).unwrap();
     let out2 = ok(&nested, &["start", "--hook-json"]);
     assert!(out2.contains("SessionStart"));
     assert_eq!(
-        fs::read_to_string(d.join(".jig/.move")).unwrap(),
+        fs::read_to_string(d.join(".billet/.move")).unwrap(),
         journal,
         "hook must not recover or mutate the journal"
     );
-    fs::remove_file(d.join(".jig/.move")).unwrap();
+    fs::remove_file(d.join(".billet/.move")).unwrap();
 
     let e = bad(&d, &["start", "--json", "--hook-json"]);
     assert!(e.contains("mutually exclusive"), "{e}");
@@ -696,7 +698,7 @@ fn list_sort_by_creation_date() {
             .replace(&format!("T {key}"), &format!("T {id}"))
             .replace("priority: 2", &format!("priority: {pri}"))
             .replace("created_at: null", &format!("created_at: {created}"));
-        fs::write(d.join(format!(".jig/{place}/{key}.md")), text).unwrap();
+        fs::write(d.join(format!(".billet/{place}/{key}.md")), text).unwrap();
     };
     seed("B100", "open", "3", "\"2026-04-03\"");
     seed("B101", "open", "1", "\"2026-04-12T06:30:00Z\"");
@@ -760,7 +762,7 @@ fn broken_pipe_stdout_exits_zero() {
     let (a, b) = UnixStream::pair().unwrap();
     drop(b);
     let fd: OwnedFd = a.into();
-    let o = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let o = Command::new(env!("CARGO_BIN_EXE_blt"))
         .args(["show", &id, "--json"])
         .current_dir(&d)
         .env("XDG_STATE_HOME", d.join("xdg"))
@@ -795,26 +797,26 @@ fn tree_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
 }
 
 fn seed_bare_registry(d: &Path) -> PathBuf {
-    let jig = d.join(".jig");
-    fs::create_dir_all(jig.join("open")).unwrap();
-    fs::create_dir_all(jig.join("closed")).unwrap();
-    fs::write(jig.join("memory.md"), "# Project Memory\n").unwrap();
-    fs::write(jig.join(".gitignore"), "/.lock\n/.move\n.*.tmp-*\n").unwrap();
-    jig
+    let billet = d.join(".billet");
+    fs::create_dir_all(billet.join("open")).unwrap();
+    fs::create_dir_all(billet.join("closed")).unwrap();
+    fs::write(billet.join("memory.md"), "# Project Memory\n").unwrap();
+    fs::write(billet.join(".gitignore"), "/.lock\n/.move\n.*.tmp-*\n").unwrap();
+    billet
 }
 
 #[test]
 fn tmp_ignore_rule_covers_nested_files() {
     let d = dir("tmpignore");
-    let jig = seed_bare_registry(&d);
+    let billet = seed_bare_registry(&d);
     let init = Command::new("git")
         .args(["init", "-q"])
         .current_dir(&d)
         .output()
         .unwrap();
     assert!(init.status.success(), "git init must succeed for this test");
-    fs::write(jig.join("open/.10000a.md.tmp-42-1"), "x").unwrap();
-    let tmp = ".jig/open/.10000a.md.tmp-42-1";
+    fs::write(billet.join("open/.10000a.md.tmp-42-1"), "x").unwrap();
+    let tmp = ".billet/open/.10000a.md.tmp-42-1";
     let ignored = || {
         Command::new("git")
             .args(["check-ignore", "--no-index", tmp])
@@ -828,7 +830,7 @@ fn tmp_ignore_rule_covers_nested_files() {
         ignored(),
         "unanchored `.*.tmp-*` must ignore nested tmp files"
     );
-    fs::write(jig.join(".gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap();
+    fs::write(billet.join(".gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap();
     assert!(
         !ignored(),
         "legacy anchored `/.*.tmp-*` must not ignore nested tmp files"
@@ -844,13 +846,17 @@ fn read_only_registry_reads_without_lock() {
     ok(&d, &["init", "--no-hooks"]);
     let id = add(&d, "ro work");
     ok(&d, &["remember", "topic", "value"]);
-    fs::remove_file(d.join(".jig/.lock")).unwrap();
+    fs::remove_file(d.join(".billet/.lock")).unwrap();
     let xdg = d.join("xdg");
     fs::create_dir_all(&xdg).unwrap();
     fs::set_permissions(&xdg, fs::Permissions::from_mode(0o777)).unwrap();
 
-    let locked: Vec<PathBuf> =
-        [d.join(".jig"), d.join(".jig/open"), d.join(".jig/closed")].to_vec();
+    let locked: Vec<PathBuf> = [
+        d.join(".billet"),
+        d.join(".billet/open"),
+        d.join(".billet/closed"),
+    ]
+    .to_vec();
     struct Restore(Vec<PathBuf>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -881,20 +887,20 @@ fn read_only_registry_reads_without_lock() {
         );
     }
     assert!(
-        !d.join(".jig/.lock").exists(),
+        !d.join(".billet/.lock").exists(),
         "read commands must not create .lock"
     );
 
     let probe = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(d.join(".jig/.probe"));
+        .open(d.join(".billet/.probe"));
     let as_root = probe.is_ok();
     if as_root {
-        fs::remove_file(d.join(".jig/.probe")).unwrap();
+        fs::remove_file(d.join(".billet/.probe")).unwrap();
     }
-    let jig_cmd = |args: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_jig"));
+    let blt_cmd = |args: &[&str]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_blt"));
         cmd.args(args)
             .current_dir(&d)
             .env("XDG_STATE_HOME", &xdg)
@@ -906,91 +912,94 @@ fn read_only_registry_reads_without_lock() {
         }
         cmd.output().unwrap()
     };
-    let o = jig_cmd(&["add", "must fail"]);
+    let o = blt_cmd(&["add", "must fail"]);
     assert!(
         !o.status.success(),
         "write succeeded in a read-only registry"
     );
     assert!(!o.stderr.is_empty());
-    assert_eq!(fs::read_dir(d.join(".jig/open")).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(d.join(".billet/open")).unwrap().count(), 1);
     drop(restore);
 
     let old = fm("10ff03", "open", "");
     let new = fm("10ff03", "closed", "");
-    fs::write(d.join(".jig/open/10ff03.md"), &old).unwrap();
-    fs::write(d.join(".jig/.move"), journal(&old, &new)).unwrap();
-    fs::File::create(d.join(".jig/.lock")).unwrap();
+    fs::write(d.join(".billet/open/10ff03.md"), &old).unwrap();
+    fs::write(d.join(".billet/.move"), journal(&old, &new)).unwrap();
+    fs::File::create(d.join(".billet/.lock")).unwrap();
     let _relock = Restore(locked.clone());
     for p in &locked {
         fs::set_permissions(p, fs::Permissions::from_mode(0o555)).unwrap();
     }
-    let o = jig_cmd(&["show", "10ff03"]);
+    let o = blt_cmd(&["show", "10ff03"]);
     assert!(
         !o.status.success(),
         "read must not silently recover in a read-only registry"
     );
     let e = String::from_utf8_lossy(&o.stderr);
-    assert!(e.contains("jig check") || e.contains(".move"), "{e}");
-    assert!(d.join(".jig/.move").exists(), "journal must remain");
-    assert!(d.join(".jig/open/10ff03.md").exists());
+    assert!(e.contains("blt check") || e.contains(".move"), "{e}");
+    assert!(d.join(".billet/.move").exists(), "journal must remain");
+    assert!(d.join(".billet/open/10ff03.md").exists());
 }
 
 #[test]
 fn init_repairs_missing_components() {
     let d = dir("initfix");
     ok(&d, &["init", "--no-hooks"]);
-    fs::remove_dir_all(d.join(".jig/closed")).unwrap();
-    fs::remove_file(d.join(".jig/memory.md")).unwrap();
-    fs::write(d.join(".jig/.gitignore"), "custom-only\n").unwrap();
-    assert_eq!(ok(&d, &["init", "--no-hooks"]), "initialized .jig/\n");
-    assert!(d.join(".jig/closed").is_dir());
+    fs::remove_dir_all(d.join(".billet/closed")).unwrap();
+    fs::remove_file(d.join(".billet/memory.md")).unwrap();
+    fs::write(d.join(".billet/.gitignore"), "custom-only\n").unwrap();
+    assert_eq!(ok(&d, &["init", "--no-hooks"]), "initialized .billet/\n");
+    assert!(d.join(".billet/closed").is_dir());
     assert_eq!(
-        fs::read_to_string(d.join(".jig/memory.md")).unwrap(),
+        fs::read_to_string(d.join(".billet/memory.md")).unwrap(),
         "# Project Memory\n",
         "repair writes fresh memory.md"
     );
     assert_eq!(
-        fs::read_to_string(d.join(".jig/.gitignore")).unwrap(),
+        fs::read_to_string(d.join(".billet/.gitignore")).unwrap(),
         "custom-only\n",
         "existing .gitignore bytes preserved"
     );
     fs::write(
-        d.join(".jig/memory.md"),
+        d.join(".billet/memory.md"),
         "# Project Memory\n\n## kept\n> v\n",
     )
     .unwrap();
     assert_eq!(
         ok(&d, &["init", "--no-hooks"]),
-        ".jig/ already initialized\n"
+        ".billet/ already initialized\n"
     );
     assert_eq!(
-        fs::read_to_string(d.join(".jig/memory.md")).unwrap(),
+        fs::read_to_string(d.join(".billet/memory.md")).unwrap(),
         "# Project Memory\n\n## kept\n> v\n"
     );
     let _id = add(&d, "post repair");
 
     #[cfg(unix)]
     {
-        fs::remove_dir_all(d.join(".jig/open")).unwrap();
-        std::os::unix::fs::symlink("closed", d.join(".jig/open")).unwrap();
+        fs::remove_dir_all(d.join(".billet/open")).unwrap();
+        std::os::unix::fs::symlink("closed", d.join(".billet/open")).unwrap();
         let e = bad(&d, &["init", "--no-hooks"]);
         assert!(e.contains("open"), "{e}");
-        fs::remove_file(d.join(".jig/open")).unwrap();
-        fs::create_dir(d.join(".jig/open")).unwrap();
+        fs::remove_file(d.join(".billet/open")).unwrap();
+        fs::create_dir(d.join(".billet/open")).unwrap();
     }
 
     let outer = dir("initouter");
     ok(&outer, &["init", "--no-hooks"]);
     let inner = outer.join("inner");
-    fs::create_dir_all(inner.join(".jig/open")).unwrap();
+    fs::create_dir_all(inner.join(".billet/open")).unwrap();
     let e = bad(&inner, &["list"]);
     assert!(
-        e.contains("jig init"),
+        e.contains("blt init"),
         "partial registry must point at init, not the ancestor: {e}"
     );
-    assert_eq!(ok(&inner, &["init", "--no-hooks"]), "initialized .jig/\n");
-    assert!(inner.join(".jig/closed").is_dir());
-    assert!(inner.join(".jig/memory.md").is_file());
+    assert_eq!(
+        ok(&inner, &["init", "--no-hooks"]),
+        "initialized .billet/\n"
+    );
+    assert!(inner.join(".billet/closed").is_dir());
+    assert!(inner.join(".billet/memory.md").is_file());
     assert_eq!(ok(&inner, &["list", "--json"]).trim(), "[]");
 }
 
@@ -1039,11 +1048,11 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
     let base = dir("agcanon");
     ok(&base, &["init", "--no-hooks"]);
     let written = fs::read_to_string(base.join("AGENTS.md")).unwrap();
-    let start = written.find("<!-- BEGIN JIG v:1 hash:").unwrap();
-    let stop = written.find("<!-- END JIG -->").unwrap() + "<!-- END JIG -->".len();
+    let start = written.find("<!-- BEGIN BILLET v:1 hash:").unwrap();
+    let stop = written.find("<!-- END BILLET -->").unwrap() + "<!-- END BILLET -->".len();
     let canonical = written[start..stop].to_string();
-    let body =
-        &canonical[canonical.find('\n').unwrap() + 1..canonical.rfind("<!-- END JIG -->").unwrap()];
+    let body = &canonical
+        [canonical.find('\n').unwrap() + 1..canonical.rfind("<!-- END BILLET -->").unwrap()];
     assert!(
         canonical.contains(&format!("hash:{:016x}", fnv1a(body))),
         "fresh block hash must cover the normalized body: {canonical}"
@@ -1062,11 +1071,11 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         };
         let check_unchanged = |d: &Path, code: i32| -> String {
             let agents = fs::read(d.join("AGENTS.md")).unwrap();
-            let tree = tree_bytes(&d.join(".jig"));
+            let tree = tree_bytes(&d.join(".billet"));
             let o = run(d, &["check"]);
             assert_eq!(o.status.code(), Some(code));
             assert_eq!(fs::read(d.join("AGENTS.md")).unwrap(), agents);
-            assert_eq!(tree_bytes(&d.join(".jig")), tree);
+            assert_eq!(tree_bytes(&d.join(".billet")), tree);
             String::from_utf8(o.stdout).unwrap()
         };
 
@@ -1074,14 +1083,14 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let d = fixture("ag-miss", format!("{pre}custom rules{nl}"));
         let out = check_unchanged(&d, 1);
         assert!(
-            out.contains("AGENTS.md: Jig instructions are missing"),
+            out.contains("AGENTS.md: Billet instructions are missing"),
             "{out}"
         );
-        assert!(out.contains("run `jig init`"), "{out}");
+        assert!(out.contains("run `blt init`"), "{out}");
         let old = fs::read_to_string(d.join("AGENTS.md")).unwrap();
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".jig/ already initialized\n"
+            ".billet/ already initialized\n"
         );
         let new = fs::read_to_string(d.join("AGENTS.md")).unwrap();
         assert_eq!(new, format!("{old}{nl}{canon}{nl}"), "append: {new}");
@@ -1093,18 +1102,18 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         assert!(out.contains("clean"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".jig/ already initialized\n"
+            ".billet/ already initialized\n"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // older intact: check reports outdated, init upgrades surgically
-        let older = canon.replace("<!-- BEGIN JIG v:1 ", "<!-- BEGIN JIG v:0 ");
+        let older = canon.replace("<!-- BEGIN BILLET v:1 ", "<!-- BEGIN BILLET v:0 ");
         let d = fixture("ag-old", format!("{pre}{older}"));
         let out = check_unchanged(&d, 1);
-        assert!(out.contains("Jig instructions are outdated"), "{out}");
+        assert!(out.contains("Billet instructions are outdated"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".jig/ already initialized\n"
+            ".billet/ already initialized\n"
         );
         assert_eq!(
             fs::read_to_string(d.join("AGENTS.md")).unwrap(),
@@ -1116,7 +1125,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         let before = fs::read(d.join("AGENTS.md")).unwrap();
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".jig/ already initialized\n"
+            ".billet/ already initialized\n"
         );
         assert_eq!(
             fs::read(d.join("AGENTS.md")).unwrap(),
@@ -1125,18 +1134,18 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         );
 
         // older intact with genuinely different body but its own valid hash
-        let old_body = format!("## Issue tracking with Jig{nl}{nl}old rules{nl}");
+        let old_body = format!("## Issue tracking with Billet{nl}{nl}old rules{nl}");
         let older2 = format!(
-            "<!-- BEGIN JIG v:0 hash:{:016x} -->{nl}{old_body}<!-- END JIG -->",
+            "<!-- BEGIN BILLET v:0 hash:{:016x} -->{nl}{old_body}<!-- END BILLET -->",
             fnv1a(&old_body)
         );
         let d = fixture("ag-old2", format!("{pre}{older2}{post}"));
         let out = check_unchanged(&d, 1);
-        assert!(out.contains("Jig instructions are outdated"), "{out}");
+        assert!(out.contains("Billet instructions are outdated"), "{out}");
         assert!(!out.contains("customized"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".jig/ already initialized\n"
+            ".billet/ already initialized\n"
         );
         assert_eq!(
             fs::read_to_string(d.join("AGENTS.md")).unwrap(),
@@ -1145,8 +1154,8 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
 
         // current customized: not a problem, init reports and leaves bytes
         let custom = canon.replace(
-            "<!-- END JIG -->",
-            &format!("- our local rule{nl}<!-- END JIG -->"),
+            "<!-- END BILLET -->",
+            &format!("- our local rule{nl}<!-- END BILLET -->"),
         );
         let file = format!("{pre}{custom}{post}");
         let d = fixture("ag-ccu", file.clone());
@@ -1154,33 +1163,33 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         assert!(out.contains("clean"), "{out}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            ".jig/ already initialized\nAGENTS.md: Jig instructions are customized; left unchanged\n"
+            ".billet/ already initialized\nAGENTS.md: Billet instructions are customized; left unchanged\n"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // older customized: check reports it, init leaves bytes and reports
         let custom_old = older.replace(
-            "<!-- END JIG -->",
-            &format!("- our local rule{nl}<!-- END JIG -->"),
+            "<!-- END BILLET -->",
+            &format!("- our local rule{nl}<!-- END BILLET -->"),
         );
         let file = format!("{pre}{custom_old}{post}");
         let d = fixture("ag-ocu", file.clone());
         let report = check_unchanged(&d, 1);
         assert!(
-            report.contains("customized Jig instructions are outdated"),
+            report.contains("customized Billet instructions are outdated"),
             "{report}"
         );
         assert!(report.contains("reapply"), "{report}");
         assert_eq!(
             ok(&d, &["init", "--no-hooks"]),
-            format!(".jig/ already initialized\n{report}"),
+            format!(".billet/ already initialized\n{report}"),
             "init must repeat the check report for NeedsAttention"
         );
         assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
 
         // newer version (intact and customized): same unsupported report
         for (name, seed) in [("ag-new", &canon), ("ag-newc", &custom)] {
-            let newer = seed.replace("<!-- BEGIN JIG v:1 ", "<!-- BEGIN JIG v:2 ");
+            let newer = seed.replace("<!-- BEGIN BILLET v:1 ", "<!-- BEGIN BILLET v:2 ");
             let file = format!("{pre}{newer}{post}");
             let d = fixture(name, file.clone());
             let report = check_unchanged(&d, 1);
@@ -1190,7 +1199,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
             );
             assert_eq!(
                 ok(&d, &["init", "--no-hooks"]),
-                format!(".jig/ already initialized\n{report}"),
+                format!(".billet/ already initialized\n{report}"),
                 "{name}: init never downgrades"
             );
             assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), file);
@@ -1200,7 +1209,7 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
         for (name, file) in [
             (
                 "ag-mal",
-                format!("{pre}<!-- BEGIN JIG v:1 -->{nl}body{nl}<!-- END JIG -->{nl}"),
+                format!("{pre}<!-- BEGIN BILLET v:1 -->{nl}body{nl}<!-- END BILLET -->{nl}"),
             ),
             ("ag-dup", format!("{pre}{canon}{nl}{canon}{nl}")),
             ("ag-ind", format!("{pre}  {canon}{nl}")),
@@ -1208,14 +1217,14 @@ fn agent_instruction_block_states_preserve_outside_bytes() {
             let d = fixture(name, file.clone());
             let out = check_unchanged(&d, 1);
             assert!(
-                out.contains("malformed or duplicated Jig instruction markers"),
+                out.contains("malformed or duplicated Billet instruction markers"),
                 "{name}: {out}"
             );
             let o = run(&d, &["init", "--no-hooks"]);
             assert_eq!(o.status.code(), Some(1), "{name}");
             assert!(
                 String::from_utf8_lossy(&o.stderr)
-                    .contains("AGENTS.md: malformed or duplicated Jig instruction markers"),
+                    .contains("AGENTS.md: malformed or duplicated Billet instruction markers"),
                 "{name}: {}",
                 String::from_utf8_lossy(&o.stderr)
             );
@@ -1229,7 +1238,7 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
     let d = dir("agentrules");
     ok(&d, &["init", "--no-hooks"]);
     let agents = fs::read_to_string(d.join("AGENTS.md")).unwrap();
-    let block = &agents[agents.find("<!-- BEGIN JIG").unwrap()..];
+    let block = &agents[agents.find("<!-- BEGIN BILLET").unwrap()..];
     let text = ok(&d, &["start"]);
     let json: Value = serde_json::from_str(&ok(&d, &["start", "--json"])).unwrap();
     let hook: Value = serde_json::from_str(&ok(&d, &["start", "--hook-json"])).unwrap();
@@ -1242,39 +1251,39 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
         workflow
     );
     let tokens = [
-        "Jig workflow",
-        "tracks work with `jig`",
+        "Billet workflow",
+        "tracks work with `blt`",
         "Do not keep task lists",
         "built-in todo or plan tool",
-        "anything that must outlive this session in `jig`",
+        "anything that must outlive this session in `blt`",
         concat!(
-            "cargo install --locked --git https://github.com/EntropyLogix/Jig --tag v",
+            "cargo install --locked --git https://github.com/EntropyLogix/Billet --tag v",
             env!("CARGO_PKG_VERSION")
         ),
-        "https://github.com/EntropyLogix/Jig",
-        "jig start` for the workflow",
-        "jig ready` lists approved, unblocked work",
-        "jig show ID` reads one issue",
+        "https://github.com/EntropyLogix/Billet",
+        "blt start` for the workflow",
+        "blt ready` lists approved, unblocked work",
+        "blt show ID` reads one issue",
         "authorizes only its described scope",
-        "jig claim ID --by NAME",
+        "blt claim ID --by NAME",
         "your agent name",
-        "jig review ID --summary TEXT",
+        "blt review ID --summary TEXT",
         "returning for rework",
         "for people unless a person explicitly tells you otherwise",
-        "jig add TITLE --body TEXT",
-        "jig note ID TEXT",
-        "jig unclaim ID",
-        "jig recall [TOPIC]",
-        "jig remember TOPIC TEXT",
+        "blt add TITLE --body TEXT",
+        "blt note ID TEXT",
+        "blt unclaim ID",
+        "blt recall [TOPIC]",
+        "blt remember TOPIC TEXT",
         "your own memory",
-        "jig check` and report to a person",
+        "blt check` and report to a person",
     ];
     for hay in [
         workflow,
-        block.strip_prefix("<!-- BEGIN JIG").unwrap_or(block),
+        block.strip_prefix("<!-- BEGIN BILLET").unwrap_or(block),
     ] {
         let mut at = 0;
-        for token in tokens.iter().skip(if hay.starts_with("Jig workflow") {
+        for token in tokens.iter().skip(if hay.starts_with("Billet workflow") {
             0
         } else {
             1
@@ -1287,6 +1296,8 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
         for gone in [
             ["Entro", "pyJig"].concat(),
             ["ENTROPY", "JIG"].concat(),
+            ["j", "ig"].concat(),
+            ["J", "ig"].concat(),
             "not approval to implement a contract".to_string(),
             "Readiness is not approval".to_string(),
         ] {
@@ -1296,7 +1307,7 @@ fn agent_block_and_start_cover_workflow_rules_in_order() {
 }
 
 fn file_key(d: &Path, id: &str) -> String {
-    if jig::issue::valid_key(id) {
+    if billet::issue::valid_key(id) {
         id.to_string()
     } else {
         key_of(d, id)
@@ -1304,13 +1315,13 @@ fn file_key(d: &Path, id: &str) -> String {
 }
 
 fn set_priority_null(d: &Path, id: &str) {
-    let path = d.join(format!(".jig/open/{}.md", file_key(d, id)));
+    let path = d.join(format!(".billet/open/{}.md", file_key(d, id)));
     let text = fs::read_to_string(&path).unwrap();
     fs::write(&path, text.replace("priority: 2", "priority: null")).unwrap();
 }
 
 fn mcp_run_bytes(dir: &Path, input: &[u8]) -> String {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_blt"))
         .arg("mcp")
         .current_dir(dir)
         .env("XDG_STATE_HOME", dir.join("xdg"))
@@ -1336,13 +1347,13 @@ fn mcp_run_bytes(dir: &Path, input: &[u8]) -> String {
         let left = deadline.saturating_duration_since(Instant::now());
         pipe.recv_timeout(left).unwrap_or_else(|_| {
             let _ = child.kill();
-            panic!("jig mcp hung: no end of output within ten seconds");
+            panic!("blt mcp hung: no end of output within ten seconds");
         })
     };
     let stdout = collect(&stdout);
     let stderr = String::from_utf8(collect(&stderr)).unwrap();
     let status = child.wait().unwrap();
-    assert!(status.success(), "jig mcp exited {status}: {stderr}");
+    assert!(status.success(), "blt mcp exited {status}: {stderr}");
     String::from_utf8(stdout).unwrap()
 }
 
@@ -1381,12 +1392,12 @@ fn mcp_initialize_protocol() {
     );
     let result = &response[0]["result"];
     assert_eq!(result["protocolVersion"], "2025-06-18");
-    assert_eq!(result["serverInfo"]["name"], "jig");
+    assert_eq!(result["serverInfo"]["name"], "billet");
     assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(result["capabilities"], json!({"tools":{}}));
     let start = ok(&d, &["start"]);
     let expected = format!(
-        "{}\n\nUse these MCP tools instead of running `jig` in the shell. Each tool mirrors the command of the same name. A person's refusal of a tool call is final and is not retried through the shell.",
+        "{}\n\nUse these MCP tools instead of running `blt` in the shell. Each tool mirrors the command of the same name. A person's refusal of a tool call is final and is not retried through the shell.",
         start.trim_end_matches('\n')
     );
     assert_eq!(result["instructions"], expected);
@@ -1408,7 +1419,7 @@ fn mcp_tools_list_dispatcher_consistency() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_string())
         .collect();
-    let expected: Vec<String> = jig::commands::command_names()
+    let expected: Vec<String> = billet::commands::command_names()
         .filter(|name| *name != "mcp")
         .flat_map(|name| {
             if name == "dep" {
@@ -1450,7 +1461,7 @@ struct McpSession {
 
 impl McpSession {
     fn start(dir: &Path) -> McpSession {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_blt"))
             .arg("mcp")
             .current_dir(dir)
             .env("XDG_STATE_HOME", dir.join("xdg"))
@@ -1484,7 +1495,7 @@ impl McpSession {
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or_else(|_| {
                 let _ = self.child.kill();
-                panic!("jig mcp hung: no answer to {message}");
+                panic!("blt mcp hung: no answer to {message}");
             });
         serde_json::from_str(&line).unwrap()
     }
@@ -1498,7 +1509,7 @@ impl McpSession {
         });
         receiver
             .recv_timeout(Duration::from_secs(10))
-            .expect("jig mcp did not exit after EOF")
+            .expect("blt mcp did not exit after EOF")
     }
 }
 
@@ -1601,7 +1612,7 @@ fn mcp_protocol_transport() {
         "the second call in the same session sees the change made through the CLI"
     );
     assert_ne!(first, second);
-    assert!(session.finish().success(), "jig mcp exits 0 at EOF");
+    assert!(session.finish().success(), "blt mcp exits 0 at EOF");
 }
 
 fn copy_tree(from: &Path, to: &Path) {
@@ -1660,7 +1671,7 @@ fn normalize(text: &str, ids: &[(String, String)]) -> String {
 }
 
 fn issue_ids(root: &Path) -> Vec<String> {
-    let mut ids: Vec<String> = tree_bytes(&root.join(".jig"))
+    let mut ids: Vec<String> = tree_bytes(&root.join(".billet"))
         .into_iter()
         .filter_map(|(path, _)| {
             let name = Path::new(&path).file_name()?.to_str()?.to_string();
@@ -1678,15 +1689,15 @@ fn cli_as_tool_result(output: &Output) -> (bool, String) {
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     if stdout.is_empty() && !output.status.success() {
         let message = stderr
-            .strip_prefix("jig: ")
+            .strip_prefix("blt: ")
             .and_then(|message| message.strip_suffix('\n'))
-            .unwrap_or_else(|| panic!("refusal is not one `jig: ` line: {stderr:?}"));
+            .unwrap_or_else(|| panic!("refusal is not one `blt: ` line: {stderr:?}"));
         return (true, message.to_string());
     }
     assert!(
         stderr
             .lines()
-            .all(|line| line.starts_with("jig: warning: ")),
+            .all(|line| line.starts_with("blt: warning: ")),
         "stderr of a completed command holds only warnings: {stderr:?}"
     );
     let mut text = stdout;
@@ -1735,7 +1746,7 @@ fn mcp_parity_without_registry(d: &Path) {
             "{tool} without a registry: files"
         );
     }
-    assert!(empty_mcp.join(".jig").is_dir() && empty_mcp.join("AGENTS.md").is_file());
+    assert!(empty_mcp.join(".billet").is_dir() && empty_mcp.join("AGENTS.md").is_file());
 }
 
 #[test]
@@ -1750,7 +1761,7 @@ fn mcp_cli_parity_all_tools() {
         .trim()
         .to_string();
     let dangling = fm("3deadb", "open", "").replace("depends_on: []", "depends_on: [\"2dead1\"]");
-    fs::write(base.join(".jig/open/3deadb.md"), dangling).unwrap();
+    fs::write(base.join(".billet/open/3deadb.md"), dangling).unwrap();
     let via_mcp = d.join("mcp");
     let via_cli = d.join("cli");
     copy_tree(&base, &via_mcp);
@@ -1985,7 +1996,7 @@ fn mcp_cli_parity_all_tools() {
 
         let (is_error, expected) = cli_as_tool_result(&cli);
         refused += usize::from(is_error);
-        warned += usize::from(expected.contains("jig: warning: "));
+        warned += usize::from(expected.contains("blt: warning: "));
         assert_eq!(result["isError"], is_error, "{case}: isError");
         let text = result["content"][0]["text"].as_str().unwrap();
         assert_eq!(
@@ -2023,12 +2034,12 @@ struct TextField {
     command: &'static str,
     name: &'static str,
     field: &'static str,
-    kind: jig::text::TextKind,
+    kind: billet::text::TextKind,
     required: bool,
 }
 
 fn text_fields() -> Vec<TextField> {
-    use jig::commands::{ArgType, COMMANDS};
+    use billet::commands::{ArgType, COMMANDS};
     COMMANDS
         .iter()
         .flat_map(|command| {
@@ -2047,8 +2058,8 @@ fn text_fields() -> Vec<TextField> {
 }
 
 const HELP: &str = concat!(
-    "Jig - file-based issue tracker and project memory\n\n",
-    "Usage: jig [--json] COMMAND [ARGS]\n\n",
+    "Billet - file-based issue tracker and project memory\n\n",
+    "Usage: blt [--json] COMMAND [ARGS]\n\n",
     "Browse\n",
     "  list [--status S] [--release NAME] [--sort oldest|newest]\n",
     "                                  issues grouped by status (default)\n",
@@ -2080,7 +2091,7 @@ const HELP: &str = concat!(
     "  remember TOPIC TEXT             record a project fact\n",
     "  recall [TOPIC]                  read project facts\n\n",
     "Setup\n",
-    "  init [--no-hooks] [--prefix P]  create .jig/, AGENTS.md and project hooks\n",
+    "  init [--no-hooks] [--prefix P]  create .billet/, AGENTS.md and project hooks\n",
     "  start                           workflow summary for agents\n",
     "  check                           report registry problems\n",
     "  mcp                             MCP server over stdio (started by the client)\n\n",
@@ -2196,7 +2207,7 @@ fn id_target(s: &Seeded, command: &str, name: &str) -> String {
 }
 
 fn text_representatives(s: &Seeded, field: &TextField) -> Vec<(String, bool)> {
-    use jig::text::TextKind;
+    use billet::text::TextKind;
     let owned = |items: &[(&str, bool)]| -> Vec<(String, bool)> {
         items.iter().map(|(v, a)| (v.to_string(), *a)).collect()
     };
@@ -2318,10 +2329,10 @@ fn check_text_field(s: &Seeded, index: usize, field: &TextField) -> Option<Strin
             return Some(format!("{}.{}", field.command, field.name));
         };
         let d = s.fresh(index * 100 + case);
-        let before = tree_bytes(&d.join(".jig"));
+        let before = tree_bytes(&d.join(".billet"));
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
         let o = run(&d, &args);
-        if field.kind == jig::text::TextKind::Body && value != "-" {
+        if field.kind == billet::text::TextKind::Body && value != "-" {
             let piped: Vec<&str> = args
                 .iter()
                 .map(|arg| if *arg == value.as_str() { "-" } else { *arg })
@@ -2363,11 +2374,11 @@ fn check_text_field(s: &Seeded, index: usize, field: &TextField) -> Option<Strin
                 Some(2),
                 "{label} must be a usage error: {stderr}"
             );
-            assert_eq!(stderr, format!("jig: {message}\n"), "{label}");
+            assert_eq!(stderr, format!("blt: {message}\n"), "{label}");
             assert_eq!(
-                tree_bytes(&d.join(".jig")),
+                tree_bytes(&d.join(".billet")),
                 before,
-                "{label} refused write changed .jig"
+                "{label} refused write changed .billet"
             );
         }
         fs::remove_dir_all(&d).unwrap();
@@ -2377,7 +2388,7 @@ fn check_text_field(s: &Seeded, index: usize, field: &TextField) -> Option<Strin
 
 #[test]
 fn every_text_argument_by_kind() {
-    use jig::text::TextKind;
+    use billet::text::TextKind;
     let contract: &[(&str, &str, TextKind)] = &[
         ("list", "release", TextKind::Release),
         ("show", "id", TextKind::Id),
@@ -2446,8 +2457,8 @@ fn every_text_argument_by_kind() {
     );
     add(&fresh, "first");
     assert!(
-        fresh.join("xdg/jig/install-id").is_file(),
-        "the install salt lives under XDG_STATE_HOME/jig"
+        fresh.join("xdg/billet/install-id").is_file(),
+        "the install salt lives under XDG_STATE_HOME/billet"
     );
 
     let s = seeded("textkinds");
@@ -2473,11 +2484,11 @@ fn every_text_argument_by_kind() {
 
 const LIFECYCLE_ID: &str = "1a1000";
 
-fn lifecycle_seed(status: jig::issue::Status) -> jig::issue::Issue {
-    use jig::issue::Status;
+fn lifecycle_seed(status: billet::issue::Status) -> billet::issue::Issue {
+    use billet::issue::Status;
     let active_claim = matches!(status, Status::Claimed | Status::Review);
     let closed = status == Status::Closed;
-    jig::issue::Issue {
+    billet::issue::Issue {
         id: LIFECYCLE_ID.into(),
         number: Some(number_of(LIFECYCLE_ID)),
         title: "seeded".into(),
@@ -2499,8 +2510,8 @@ fn lifecycle_seed(status: jig::issue::Status) -> jig::issue::Issue {
     }
 }
 
-fn place_of(status: jig::issue::Status) -> &'static str {
-    if status == jig::issue::Status::Closed {
+fn place_of(status: billet::issue::Status) -> &'static str {
+    if status == billet::issue::Status::Closed {
         "closed"
     } else {
         "open"
@@ -2510,11 +2521,11 @@ fn place_of(status: jig::issue::Status) -> &'static str {
 struct Transition {
     stdout: &'static str,
     entry: String,
-    change: fn(&mut jig::issue::Issue),
+    change: fn(&mut billet::issue::Issue),
 }
 
-fn lifecycle_expect(argv: &[&str], from: jig::issue::Status) -> Result<Transition, String> {
-    use jig::issue::Status;
+fn lifecycle_expect(argv: &[&str], from: billet::issue::Status) -> Result<Transition, String> {
+    use billet::issue::Status;
     let name = from.as_str();
     let lifecycle = h(LIFECYCLE_ID);
     let refuse = |verb: &str| Err(format!("issue {lifecycle} is {name} and cannot {verb}"));
@@ -2582,7 +2593,7 @@ fn lifecycle_expect(argv: &[&str], from: jig::issue::Status) -> Result<Transitio
         ("rework", _) => refuse("rework"),
         ("close", Status::Closed) => Err(format!("issue {lifecycle} is already closed")),
         ("close", _) => {
-            let change: fn(&mut jig::issue::Issue) = if argv.contains(&"--summary") {
+            let change: fn(&mut billet::issue::Issue) = if argv.contains(&"--summary") {
                 |i| {
                     i.status = Status::Closed;
                     i.claim_id = None;
@@ -2648,8 +2659,8 @@ fn without_stamps(text: &str) -> String {
         .join("\n")
 }
 
-fn every_status() -> [jig::issue::Status; 5] {
-    use jig::issue::Status;
+fn every_status() -> [billet::issue::Status; 5] {
+    use billet::issue::Status;
     let all = [
         Status::Proposed,
         Status::Open,
@@ -2667,28 +2678,28 @@ fn every_status() -> [jig::issue::Status; 5] {
 }
 
 fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
-    use jig::issue::Status;
+    use billet::issue::Status;
     for from in every_status() {
         let d = root.join(format!("a{index}-{}", from.as_str()));
         copy_tree(&root.join("base"), &d);
         let seed = lifecycle_seed(from);
-        let path = d.join(format!(".jig/{}/{LIFECYCLE_ID}.md", place_of(from)));
-        fs::write(&path, jig::issue::encode(&seed).unwrap()).unwrap();
+        let path = d.join(format!(".billet/{}/{LIFECYCLE_ID}.md", place_of(from)));
+        fs::write(&path, billet::issue::encode(&seed).unwrap()).unwrap();
         let mut args = vec![argv[0], LIFECYCLE_ID];
         args.extend(&argv[1..]);
         let label = format!("{} from {}", argv.join(" "), from.as_str());
-        let before = tree_bytes(&d.join(".jig"));
+        let before = tree_bytes(&d.join(".billet"));
         let o = run(&d, &args);
         let stdout = String::from_utf8_lossy(&o.stdout).replace(&h(LIFECYCLE_ID), "ID");
         let stderr = String::from_utf8_lossy(&o.stderr).to_string();
         match lifecycle_expect(argv, from) {
             Err(message) => {
                 assert_eq!(o.status.code(), Some(1), "{label}: {stderr}");
-                assert_eq!(stderr, format!("jig: {message}\n"), "{label}");
+                assert_eq!(stderr, format!("blt: {message}\n"), "{label}");
                 assert_eq!(
-                    tree_bytes(&d.join(".jig")),
+                    tree_bytes(&d.join(".billet")),
                     before,
-                    "{label} refusal changed .jig"
+                    "{label} refusal changed .billet"
                 );
             }
             Ok(t) => {
@@ -2700,7 +2711,7 @@ fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
                     && argv.contains(&"1.0")
                 {
                     assert_eq!(
-                        tree_bytes(&d.join(".jig")),
+                        tree_bytes(&d.join(".billet")),
                         before,
                         "{label} same release is a no-op"
                     );
@@ -2716,14 +2727,14 @@ fn check_lifecycle_action(root: &Path, index: usize, argv: &[&str]) {
                     expected.notes.push_str("\n- <stamp> qa: n");
                 }
                 let after = d.join(format!(
-                    ".jig/{}/{LIFECYCLE_ID}.md",
+                    ".billet/{}/{LIFECYCLE_ID}.md",
                     place_of(expected.status)
                 ));
                 if place_of(expected.status) != place_of(from) {
                     assert!(!path.exists(), "{label} left the old file");
                 }
                 let text = fs::read_to_string(&after).unwrap();
-                let mut actual = jig::issue::decode(&text).unwrap();
+                let mut actual = billet::issue::decode(&text).unwrap();
                 assert_eq!(
                     without_stamps(&actual.history),
                     without_stamps(&expected.history),
@@ -2797,15 +2808,15 @@ fn lifecycle_transition_matrix() {
         &["defer", "--clear"],
         &["note", "n", "--by", "qa"],
     ];
-    let writes: Vec<&str> = jig::commands::COMMANDS
+    let writes: Vec<&str> = billet::commands::COMMANDS
         .iter()
-        .filter(|c| !jig::commands::JSON_CMDS.contains(&c.name) && c.name != "dep")
+        .filter(|c| !billet::commands::JSON_CMDS.contains(&c.name) && c.name != "dep")
         .filter(|c| {
             c.args.iter().any(|a| {
                 a.positional
                     && matches!(
                         a.kind,
-                        jig::commands::ArgType::Text(jig::text::TextKind::Id)
+                        billet::commands::ArgType::Text(billet::text::TextKind::Id)
                     )
             })
         })
@@ -2833,7 +2844,7 @@ fn lifecycle_lists_and_release(d: &Path) {
     ok(d, &["init", "--no-hooks"]);
     let proposed = ok(d, &["add", "proposed"]).trim().to_string();
     let file =
-        fs::read_to_string(d.join(format!(".jig/open/{}.md", key_of(d, &proposed)))).unwrap();
+        fs::read_to_string(d.join(format!(".billet/open/{}.md", key_of(d, &proposed)))).unwrap();
     assert!(
         file.lines().any(|l| l == "priority: 2"),
         "add without -p stores 2: {file}"
@@ -2893,12 +2904,12 @@ fn lifecycle_lists_and_release(d: &Path) {
     let unreadable = add(d, "unreadable");
     ok(d, &["close", &unreadable, "--reason", "done"]);
     let unreadable = key_of(d, &unreadable);
-    let unreadable_path = d.join(format!(".jig/closed/{unreadable}.md"));
+    let unreadable_path = d.join(format!(".billet/closed/{unreadable}.md"));
     fs::write(&unreadable_path, "not an issue file").unwrap();
     let inconsistent = add(d, "inconsistent");
     ok(d, &["close", &inconsistent, "--reason", "done"]);
     let inconsistent = key_of(d, &inconsistent);
-    let inconsistent_path = d.join(format!(".jig/closed/{inconsistent}.md"));
+    let inconsistent_path = d.join(format!(".billet/closed/{inconsistent}.md"));
     let text = fs::read_to_string(&inconsistent_path)
         .unwrap()
         .replace("priority: 2", "priority: 9");
@@ -2924,12 +2935,12 @@ fn lifecycle_lists_and_release(d: &Path) {
     let warnings = String::from_utf8_lossy(&sealed.stderr);
     for id in [&unreadable, &inconsistent] {
         assert_eq!(
-            warnings.matches(&format!(".jig/closed/{id}.md")).count(),
+            warnings.matches(&format!(".billet/closed/{id}.md")).count(),
             1,
             "{warnings}"
         );
     }
-    assert!(warnings.contains("jig check"), "{warnings}");
+    assert!(warnings.contains("blt check"), "{warnings}");
     assert_eq!(
         [
             fs::read(&unreadable_path).unwrap(),
@@ -2954,7 +2965,7 @@ fn lifecycle_lists_and_release(d: &Path) {
     assert_eq!(e.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&e.stderr),
-        "jig: --release requires --status closed or all\n"
+        "blt: --release requires --status closed or all\n"
     );
     let third = add(d, "third");
     ok(d, &["close", &third, "--reason", "done"]);
@@ -3018,7 +3029,7 @@ fn seed_file(d: &Path, id: &str, status: &str, edit: impl Fn(String) -> String) 
             .replace("assignee: null", "assignee: \"bot\"")
             .replace("claim_id: null", "claim_id: \"c1\"");
     }
-    fs::write(d.join(format!(".jig/open/{id}.md")), edit(text)).unwrap();
+    fs::write(d.join(format!(".billet/open/{id}.md")), edit(text)).unwrap();
 }
 
 fn readiness_rows_status(d: &Path) -> Vec<Row> {
@@ -3058,7 +3069,7 @@ fn readiness_rows_deferred(d: &Path) -> Vec<Row> {
         None,
     ));
     let today = add(d, "deferred until today");
-    ok(d, &["defer", &today, "--until", &jig::clock::today()]);
+    ok(d, &["defer", &today, "--until", &billet::clock::today()]);
     rows.push(ready("deferred until today", today));
     let parent = add(d, "deferred parent");
     let kid = child(d, &parent, "child", true);
@@ -3268,7 +3279,7 @@ fn readiness_rows_unresolved(d: &Path) -> Vec<Row> {
     rows.push(unresolved(
         "unusable blocker",
         &behind,
-        format!("blocker {bad_blocker} (unusable .jig/open/{bad_blocker}.md)"),
+        format!("blocker {bad_blocker} (unusable .billet/open/{bad_blocker}.md)"),
         &[],
         &[],
         "",
@@ -3279,18 +3290,18 @@ fn readiness_rows_unresolved(d: &Path) -> Vec<Row> {
     rows.push(unresolved(
         "subtask with an invalid field",
         &host,
-        format!("subtask .jig/open/{invalid}.md (unusable)"),
+        format!("subtask .billet/open/{invalid}.md (unusable)"),
         &[],
         &[],
         "",
     ));
     let host = add(d, "parent of unparseable subtask");
     let broken = key_of(d, &child(d, &host, "child", true));
-    fs::write(d.join(format!(".jig/open/{broken}.md")), "not parseable").unwrap();
+    fs::write(d.join(format!(".billet/open/{broken}.md")), "not parseable").unwrap();
     rows.push(unresolved(
         "unparseable subtask",
         &host,
-        format!("subtask .jig/open/{broken}.md (unusable)"),
+        format!("subtask .billet/open/{broken}.md (unusable)"),
         &[],
         &[],
         "",
@@ -3298,11 +3309,11 @@ fn readiness_rows_unresolved(d: &Path) -> Vec<Row> {
     let host = add(d, "grandparent of unparseable");
     let middle = child(d, &host, "child", true);
     let leaf = key_of(d, &child(d, &middle, "grandchild", true));
-    fs::write(d.join(format!(".jig/open/{leaf}.md")), "not parseable").unwrap();
+    fs::write(d.join(format!(".billet/open/{leaf}.md")), "not parseable").unwrap();
     rows.push(unresolved(
         "unparseable grandchild",
         &host,
-        format!("subtask .jig/open/{leaf}.md (unusable)"),
+        format!("subtask .billet/open/{leaf}.md (unusable)"),
         &[],
         &[&middle],
         &format!("; waiting for subtasks {middle}"),
@@ -3318,7 +3329,7 @@ fn check_readiness_row(base: &Path, scratch: &Path, row: &Row, listed: &[Value],
     let unresolved = !readiness["unresolved"].as_array().unwrap().is_empty();
     let line = match (reasons.is_empty(), unresolved) {
         (true, _) => "Ready: yes".to_string(),
-        (false, true) => format!("Ready: no — {reasons} (run `jig check`)"),
+        (false, true) => format!("Ready: no — {reasons} (run `blt check`)"),
         (false, false) => format!("Ready: no — {reasons}"),
     };
     let shown = ok(base, &["show", &row.id]);
@@ -3348,8 +3359,8 @@ fn check_readiness_row(base: &Path, scratch: &Path, row: &Row, listed: &[Value],
     } else {
         ""
     };
-    let suffix = if unresolved { " (run `jig check`)" } else { "" };
-    let refusal = format!("jig: issue {shown_id} {prefix}is not ready: {reasons}{suffix}\n");
+    let suffix = if unresolved { " (run `blt check`)" } else { "" };
+    let refusal = format!("blt: issue {shown_id} {prefix}is not ready: {reasons}{suffix}\n");
     let claim = run(&d, &["claim", &row.id]);
     if reasons.is_empty() {
         assert!(
@@ -3470,14 +3481,18 @@ fn dependency_edits(d: &Path) {
     ok(d, &["init", "--no-hooks"]);
     let [a, b, c, x, y] = ["a", "b", "c", "x", "y"].map(|t| add(d, t));
     let refuse = |args: &[&str], message: String| {
-        let before = tree_bytes(&d.join(".jig"));
+        let before = tree_bytes(&d.join(".billet"));
         let o = run(d, args);
         assert_eq!(
             String::from_utf8_lossy(&o.stderr),
-            format!("jig: {message}\n"),
+            format!("blt: {message}\n"),
             "{args:?}"
         );
-        assert_eq!(tree_bytes(&d.join(".jig")), before, "{args:?} changed .jig");
+        assert_eq!(
+            tree_bytes(&d.join(".billet")),
+            before,
+            "{args:?} changed .billet"
+        );
     };
     assert_eq!(
         ok(d, &["dep", "add", &a, &b]),
@@ -3511,14 +3526,14 @@ fn dependency_edits(d: &Path) {
         assert_eq!(o.status.code(), Some(2));
         assert_eq!(
             String::from_utf8_lossy(&o.stderr),
-            "jig: defer requires exactly one of --until or --clear\n"
+            "blt: defer requires exactly one of --until or --clear\n"
         );
     }
 
     ok(d, &["dep", "add", &a, &y]);
     let y_key = key_of(d, &y);
     fs::rename(
-        d.join(format!(".jig/open/{y_key}.md")),
+        d.join(format!(".billet/open/{y_key}.md")),
         d.join("outside.md"),
     )
     .unwrap();
@@ -3554,7 +3569,7 @@ fn dmg_text(id: &str, status: &str, parent: Option<&str>) -> String {
 }
 
 fn dmg_path(id: &str) -> String {
-    format!(".jig/open/{id}.md")
+    format!(".billet/open/{id}.md")
 }
 
 #[derive(Clone)]
@@ -3605,8 +3620,8 @@ fn victim_with(
     }
 }
 
-fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'static str> {
-    use jig::ProblemKind as K;
+fn damages(kind: billet::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'static str> {
+    use billet::ProblemKind as K;
     let victim = dmg_path(v);
     let skipped = || Reaction::Skipped(vec![dmg_path(v)]);
     let unreadable = "fix the file or restore it from version control";
@@ -3633,18 +3648,18 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
     Ok(match kind {
         K::IssueDirectory => vec![damage(
             "closed directory is a file",
-            ".jig/closed",
+            ".billet/closed",
             "must be a real directory (not a symbolic link)",
             "restore a real directory at this path",
             Reaction::Refused,
             move |d: &Path| {
-                fs::remove_dir_all(d.join(".jig/closed")).unwrap();
-                fs::write(d.join(".jig/closed"), "x").unwrap();
+                fs::remove_dir_all(d.join(".billet/closed")).unwrap();
+                fs::write(d.join(".billet/closed"), "x").unwrap();
             },
         )],
         K::IssueDirectoryUnlistable => vec![chmod_dir(
             "closed directory unreadable",
-            ".jig/closed",
+            ".billet/closed",
             0o000,
         )],
         K::IssueEntryUnlistable => {
@@ -3652,27 +3667,27 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
         }
         K::IssueNameNotUtf8 => vec![damage(
             "issue file name is not UTF-8",
-            ".jig/open/\u{fffd}",
+            ".billet/open/\u{fffd}",
             "unexpected file with a non-UTF-8 name",
             "remove or rename the file",
             Reaction::Unaffected,
-            move |d: &Path| write_non_utf8(&d.join(".jig/open")),
+            move |d: &Path| write_non_utf8(&d.join(".billet/open")),
         )],
         K::TemporaryFile => vec![damage(
             "abandoned temporary file",
-            ".jig/open/.10000a.md.tmp-42-1",
+            ".billet/open/.10000a.md.tmp-42-1",
             "abandoned temporary file",
-            "remove it after checking no jig process is running",
+            "remove it after checking no blt process is running",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".jig/open/.10000a.md.tmp-42-1"), "x").unwrap(),
+            move |d: &Path| fs::write(d.join(".billet/open/.10000a.md.tmp-42-1"), "x").unwrap(),
         )],
         K::UnexpectedFile => vec![damage(
             "unexpected file",
-            ".jig/open/notes.txt",
+            ".billet/open/notes.txt",
             "unexpected file in an issue directory",
             "remove or rename the file",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".jig/open/notes.txt"), "x").unwrap(),
+            move |d: &Path| fs::write(d.join(".billet/open/notes.txt"), "x").unwrap(),
         )],
         K::IssueUnreadable => {
             let mut list = vec![
@@ -3792,11 +3807,11 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
                 &victim,
                 format!("duplicate issue key {v}"),
                 "keep one record for this issue and remove the others",
-                Reaction::Skipped(vec![dmg_path(v), format!(".jig/closed/{v}.md")]),
+                Reaction::Skipped(vec![dmg_path(v), format!(".billet/closed/{v}.md")]),
                 move |d: &Path| {
                     let text = fs::read_to_string(d.join(dmg_path(v))).unwrap();
                     fs::write(
-                        d.join(format!(".jig/closed/{v}.md")),
+                        d.join(format!(".billet/closed/{v}.md")),
                         text.replace("status: open", "status: closed"),
                     )
                     .unwrap();
@@ -3812,7 +3827,7 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
                     let text = fm(DMG_DOUBLE, "open", "");
                     fs::write(d.join(dmg_path(DMG_DOUBLE)), &text).unwrap();
                     fs::write(
-                        d.join(format!(".jig/closed/{DMG_DOUBLE}.md")),
+                        d.join(format!(".billet/closed/{DMG_DOUBLE}.md")),
                         text.replace("status: open", "status: closed"),
                     )
                     .unwrap();
@@ -3831,12 +3846,16 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
         )],
         K::WrongDirectory => vec![damage(
             "open issue in closed/",
-            format!(".jig/closed/{v}.md"),
+            format!(".billet/closed/{v}.md"),
             "status open does not belong in closed/",
             "move the file to the other directory or fix the status field",
-            Reaction::Skipped(vec![format!(".jig/closed/{v}.md")]),
+            Reaction::Skipped(vec![format!(".billet/closed/{v}.md")]),
             move |d: &Path| {
-                fs::rename(d.join(dmg_path(v)), d.join(format!(".jig/closed/{v}.md"))).unwrap()
+                fs::rename(
+                    d.join(dmg_path(v)),
+                    d.join(format!(".billet/closed/{v}.md")),
+                )
+                .unwrap()
             },
         )],
         K::FieldConflict => vec![
@@ -3901,7 +3920,7 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
             "blocker missing",
             dmg_path(v),
             "blocker 1dead0: missing issue 1dead0",
-            format!("restore the issue file for 1dead0 or run `jig dep rm {v} 1dead0`"),
+            format!("restore the issue file for 1dead0 or run `blt dep rm {v} 1dead0`"),
             Reaction::Unresolved(v),
             move |d: &Path| {
                 let path = d.join(dmg_path(v));
@@ -3916,7 +3935,7 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
         K::UnresolvedReference => vec![damage(
             "unusable subtask",
             &victim,
-            format!("unresolved subtask .jig/open/{DMG_LEAF}.md (unusable)"),
+            format!("unresolved subtask .billet/open/{DMG_LEAF}.md (unusable)"),
             "fix or restore the referenced issue; see the other reported problems",
             Reaction::Unresolved(v),
             move |d: &Path| fs::write(d.join(dmg_path(DMG_LEAF)), "not an issue").unwrap(),
@@ -3925,7 +3944,7 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
             "two-issue cycle",
             dmg_path(DMG_HEALTHY),
             format!("dependency cycle {DMG_HEALTHY} -> 2e0000 -> {DMG_HEALTHY}"),
-            format!("remove one edge, e.g. `jig dep rm 2e0000 {DMG_HEALTHY}`"),
+            format!("remove one edge, e.g. `blt dep rm 2e0000 {DMG_HEALTHY}`"),
             Reaction::Unaffected,
             move |d: &Path| {
                 let path = d.join(dmg_path(DMG_HEALTHY));
@@ -3947,21 +3966,21 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
         )],
         K::DocsDirectory => vec![damage(
             "docs is a file",
-            ".jig/docs",
+            ".billet/docs",
             "must be a real directory (not a symbolic link)",
             "restore a real directory at this path or remove it",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".jig/docs"), "x").unwrap(),
+            move |d: &Path| fs::write(d.join(".billet/docs"), "x").unwrap(),
         )],
         K::DocsUnlistable => vec![damage(
             "docs unreadable",
-            ".jig/docs",
+            ".billet/docs",
             "cannot list directory: ",
             "fix directory permissions",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".jig/docs")).unwrap();
-                set_mode(&d.join(".jig/docs"), 0o000);
+                fs::create_dir_all(d.join(".billet/docs")).unwrap();
+                set_mode(&d.join(".billet/docs"), 0o000);
             },
         )],
         K::DocsEntryUnlistable => {
@@ -3972,74 +3991,77 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
         }
         K::DocsNameNotUtf8 => vec![damage(
             "docs entry name is not UTF-8",
-            ".jig/docs/\u{fffd}",
+            ".billet/docs/\u{fffd}",
             "name is not valid UTF-8",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".jig/docs")).unwrap();
-                write_non_utf8(&d.join(".jig/docs"));
+                fs::create_dir_all(d.join(".billet/docs")).unwrap();
+                write_non_utf8(&d.join(".billet/docs"));
             },
         )],
         K::DocsSymlink => vec![damage(
             "docs entry is a symbolic link",
-            format!(".jig/docs/{v}"),
+            format!(".billet/docs/{v}"),
             "must be a real directory (not a symbolic link)",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".jig/docs")).unwrap();
+                fs::create_dir_all(d.join(".billet/docs")).unwrap();
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(d.join(".jig/open"), d.join(format!(".jig/docs/{v}")))
-                    .unwrap();
+                std::os::unix::fs::symlink(
+                    d.join(".billet/open"),
+                    d.join(format!(".billet/docs/{v}")),
+                )
+                .unwrap();
             },
         )],
         K::DocsNotDirectory => vec![damage(
             "docs entry is a file",
-            format!(".jig/docs/{v}"),
+            format!(".billet/docs/{v}"),
             "entry is not a directory",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::create_dir_all(d.join(".jig/docs")).unwrap();
-                fs::write(d.join(format!(".jig/docs/{v}")), "x").unwrap();
+                fs::create_dir_all(d.join(".billet/docs")).unwrap();
+                fs::write(d.join(format!(".billet/docs/{v}")), "x").unwrap();
             },
         )],
         K::DocsOrphan => vec![damage(
             "docs for a missing issue",
-            ".jig/docs/1fffff",
+            ".billet/docs/1fffff",
             "no issue with id 1fffff exists",
             "rename it to the issue ID or remove it",
             Reaction::Unaffected,
-            move |d: &Path| fs::create_dir_all(d.join(".jig/docs/1fffff")).unwrap(),
+            move |d: &Path| fs::create_dir_all(d.join(".billet/docs/1fffff")).unwrap(),
         )],
         K::ConfigFile => vec![damage(
             "config.json is a directory",
-            ".jig/config.json",
+            ".billet/config.json",
             "must be a real regular file (not a symbolic link)",
-            "restore .jig/config.json as a regular file",
+            "restore .billet/config.json as a regular file",
             Reaction::Refused,
             move |d: &Path| {
-                fs::remove_file(d.join(".jig/config.json")).unwrap();
-                fs::create_dir(d.join(".jig/config.json")).unwrap();
+                fs::remove_file(d.join(".billet/config.json")).unwrap();
+                fs::create_dir(d.join(".billet/config.json")).unwrap();
             },
         )],
         K::ConfigMissing => vec![damage(
             "config.json missing",
-            ".jig/config.json",
+            ".billet/config.json",
             "config.json is missing",
-            "run `jig init` to write the default configuration",
+            "run `blt init` to write the default configuration",
             Reaction::Refused,
-            move |d: &Path| fs::remove_file(d.join(".jig/config.json")).unwrap(),
+            move |d: &Path| fs::remove_file(d.join(".billet/config.json")).unwrap(),
         )],
         K::ConfigInvalid => vec![damage(
             "invalid prefix",
-            ".jig/config.json",
+            ".billet/config.json",
             "invalid prefix \"bad\"",
             "write {\"prefix\": \"B\"} or another valid prefix (use 1 to 8 uppercase letters, optionally followed by '-')",
             Reaction::Refused,
             move |d: &Path| {
-                fs::write(d.join(".jig/config.json"), "{\"prefix\": \"bad\"}\n").unwrap()
+                fs::write(d.join(".billet/config.json"), "{\"prefix\": \"bad\"}\n").unwrap()
             },
         )],
         K::DuplicateNumber => vec![damage(
@@ -4051,7 +4073,7 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
                 dmg_path(DMG_HEALTHY)
             ),
             format!(
-                "a person gives one of them an unused number: `jig update {DMG_TWIN} --number N`"
+                "a person gives one of them an unused number: `blt update {DMG_TWIN} --number N`"
             ),
             Reaction::Ambiguous(h(DMG_HEALTHY)),
             move |d: &Path| {
@@ -4064,106 +4086,106 @@ fn damages(kind: jig::ProblemKind, v: &'static str) -> Result<Vec<Damage>, &'sta
         )],
         K::MemoryFile => vec![damage(
             "memory.md is a directory",
-            ".jig/memory.md",
+            ".billet/memory.md",
             "must be a real regular file (not a symbolic link)",
-            "restore memory.md as a regular file or run `jig init`",
+            "restore memory.md as a regular file or run `blt init`",
             Reaction::Refused,
             move |d: &Path| {
-                fs::remove_file(d.join(".jig/memory.md")).unwrap();
-                fs::create_dir(d.join(".jig/memory.md")).unwrap();
+                fs::remove_file(d.join(".billet/memory.md")).unwrap();
+                fs::create_dir(d.join(".billet/memory.md")).unwrap();
             },
         )],
         K::MemoryMissing => vec![damage(
             "memory.md missing",
-            ".jig/memory.md",
+            ".billet/memory.md",
             "memory.md is missing",
-            "run `jig init` to create it",
+            "run `blt init` to create it",
             Reaction::Refused,
-            move |d: &Path| fs::remove_file(d.join(".jig/memory.md")).unwrap(),
+            move |d: &Path| fs::remove_file(d.join(".billet/memory.md")).unwrap(),
         )],
         K::MemoryUnreadable => vec![damage(
             "memory.md unreadable",
-            ".jig/memory.md",
+            ".billet/memory.md",
             "cannot read: ",
             "fix file permissions or restore memory.md",
             Reaction::Unaffected,
-            move |d: &Path| set_mode(&d.join(".jig/memory.md"), 0o000),
+            move |d: &Path| set_mode(&d.join(".billet/memory.md"), 0o000),
         )],
         K::MemoryMalformed => vec![damage(
             "memory.md malformed",
-            ".jig/memory.md",
+            ".billet/memory.md",
             "",
             "fix memory.md manually",
             Reaction::Unaffected,
-            move |d: &Path| fs::write(d.join(".jig/memory.md"), "junk\n").unwrap(),
+            move |d: &Path| fs::write(d.join(".billet/memory.md"), "junk\n").unwrap(),
         )],
         K::GitignoreFile => vec![damage(
             ".gitignore is a directory",
-            ".jig/.gitignore",
+            ".billet/.gitignore",
             "must be a real regular file (not a symbolic link)",
-            "restore .jig/.gitignore as a regular file",
+            "restore .billet/.gitignore as a regular file",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::remove_file(d.join(".jig/.gitignore")).unwrap();
-                fs::create_dir(d.join(".jig/.gitignore")).unwrap();
+                fs::remove_file(d.join(".billet/.gitignore")).unwrap();
+                fs::create_dir(d.join(".billet/.gitignore")).unwrap();
             },
         )],
         K::GitignoreMissing => vec![damage(
             ".gitignore missing",
-            ".jig/.gitignore",
+            ".billet/.gitignore",
             ".gitignore is missing",
-            "add the line `.*.tmp-*` to .jig/.gitignore",
+            "add the line `.*.tmp-*` to .billet/.gitignore",
             Reaction::Unaffected,
-            move |d: &Path| fs::remove_file(d.join(".jig/.gitignore")).unwrap(),
+            move |d: &Path| fs::remove_file(d.join(".billet/.gitignore")).unwrap(),
         )],
         K::GitignoreUnreadable => vec![damage(
             ".gitignore unreadable",
-            ".jig/.gitignore",
+            ".billet/.gitignore",
             "cannot read: ",
-            "fix file permissions or restore .jig/.gitignore",
+            "fix file permissions or restore .billet/.gitignore",
             Reaction::Unaffected,
-            move |d: &Path| set_mode(&d.join(".jig/.gitignore"), 0o000),
+            move |d: &Path| set_mode(&d.join(".billet/.gitignore"), 0o000),
         )],
         K::GitignoreLegacyRule => vec![damage(
             "legacy temporary rule",
-            ".jig/.gitignore",
+            ".billet/.gitignore",
             "legacy `/.*.tmp-*` rule does not ignore nested temporary files",
-            "replace `/.*.tmp-*` with `.*.tmp-*` in .jig/.gitignore",
+            "replace `/.*.tmp-*` with `.*.tmp-*` in .billet/.gitignore",
             Reaction::Unaffected,
             move |d: &Path| {
-                fs::write(d.join(".jig/.gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap()
+                fs::write(d.join(".billet/.gitignore"), "/.lock\n/.move\n/.*.tmp-*\n").unwrap()
             },
         )],
         K::AgentInstructions => vec![damage(
             "instructions missing",
             "AGENTS.md",
-            "Jig instructions are missing",
-            "run `jig init` to add the instructions",
+            "Billet instructions are missing",
+            "run `blt init` to add the instructions",
             Reaction::Unaffected,
             move |d: &Path| fs::remove_file(d.join("AGENTS.md")).unwrap(),
         )],
         K::PendingMove => vec![damage(
             "pending move",
-            ".jig/.move",
+            ".billet/.move",
             format!("pending move journal for {DMG_HEALTHY}"),
-            "finish it with any write command in a writable checkout, or resolve .jig/.move manually",
+            "finish it with any write command in a writable checkout, or resolve .billet/.move manually",
             Reaction::Journal,
             move |d: &Path| {
                 let old = fs::read_to_string(d.join(dmg_path(DMG_HEALTHY))).unwrap();
                 let new = old.replace("status: open", "status: closed");
-                fs::write(d.join(".jig/.move"), journal(&old, &new)).unwrap();
+                fs::write(d.join(".billet/.move"), journal(&old, &new)).unwrap();
             },
         )],
         K::MoveJournal => vec![damage(
             "corrupt journal lengths",
-            ".jig/.move",
+            ".billet/.move",
             "",
-            "resolve .jig/.move manually",
+            "resolve .billet/.move manually",
             Reaction::Journal,
             move |d: &Path| {
                 fs::write(
-                    d.join(".jig/.move"),
-                    "JIG-MOVE-1\n18446744073709551615\n2\nxy",
+                    d.join(".billet/.move"),
+                    "BILLET-MOVE-1\n18446744073709551615\n2\nxy",
                 )
                 .unwrap()
             },
@@ -4186,10 +4208,10 @@ fn restore_modes(root: &Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         for rel in [
-            ".jig/closed",
-            ".jig/docs",
-            ".jig/memory.md",
-            ".jig/.gitignore",
+            ".billet/closed",
+            ".billet/docs",
+            ".billet/memory.md",
+            ".billet/.gitignore",
         ] {
             let path = root.join(rel);
             if let Ok(meta) = fs::symlink_metadata(&path) {
@@ -4248,23 +4270,23 @@ fn has_id(stdout: &str, key: &str) -> bool {
     stdout.contains(&format!("\"id\":\"{}\"", h(key)))
 }
 
-fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, dmg: &Damage) {
+fn check_damage(base: &Path, root: &Path, kind: billet::ProblemKind, index: usize, dmg: &Damage) {
     let label = format!("{kind:?} / {}", dmg.name);
     let d = root.join(format!("{kind:?}-{index}"));
     copy_tree(base, &d);
     (dmg.apply)(&d);
     let file_level = matches!(
         kind,
-        jig::ProblemKind::FileNameMismatch
-            | jig::ProblemKind::DuplicateId
-            | jig::ProblemKind::PendingMove
+        billet::ProblemKind::FileNameMismatch
+            | billet::ProblemKind::DuplicateId
+            | billet::ProblemKind::PendingMove
     );
     let problem_text = if file_level {
         dmg.problem.clone()
     } else {
         render_keys(&d, &dmg.problem)
     };
-    let hint_text = if kind == jig::ProblemKind::DuplicateNumber {
+    let hint_text = if kind == billet::ProblemKind::DuplicateNumber {
         dmg.hint.clone()
     } else {
         render_keys(&d, &dmg.hint)
@@ -4279,7 +4301,7 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
     }
     let abs = d.to_string_lossy().to_string();
 
-    let kinds = jig::problem_kinds(&d);
+    let kinds = billet::problem_kinds(&d);
     assert!(
         kinds
             .iter()
@@ -4287,16 +4309,16 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
         "{label}: the seed must produce its kind at {}; got {kinds:?}",
         dmg.path
     );
-    if kind != jig::ProblemKind::DuplicateNumber {
+    if kind != billet::ProblemKind::DuplicateNumber {
         assert!(
             kinds
                 .iter()
-                .all(|(k, _)| *k != jig::ProblemKind::DuplicateNumber),
+                .all(|(k, _)| *k != billet::ProblemKind::DuplicateNumber),
             "{label}: only a duplicated number may report one: {kinds:?}"
         );
     }
 
-    let lock = d.join(".jig/.lock");
+    let lock = d.join(".billet/.lock");
     let had_lock = lock.exists();
     if had_lock {
         fs::remove_file(&lock).unwrap();
@@ -4368,7 +4390,7 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
         );
         for line in stderr.lines() {
             assert!(
-                line.contains("jig check"),
+                line.contains("blt check"),
                 "{label} {args:?}: warning without pointer: {line}"
             );
         }
@@ -4401,7 +4423,8 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 for path in paths {
-                    let expected = usize::from(args[1] != "ready" || path.starts_with(".jig/open"));
+                    let expected =
+                        usize::from(args[1] != "ready" || path.starts_with(".billet/open"));
                     assert_eq!(
                         stderr.matches(&format!("skipping {path}:")).count(),
                         expected,
@@ -4482,7 +4505,7 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
                 assert_eq!(
                     stderr
                         .matches(&format!(
-                            "{path}: {}; run `jig check`",
+                            "{path}: {}; run `blt check`",
                             entry["problem"].as_str().unwrap()
                         ))
                         .count(),
@@ -4536,7 +4559,7 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
                 "{label}"
             );
             let stderr = unchanged(&["claim", id]);
-            assert!(stderr.ends_with("(run `jig check`)\n"), "{label}: {stderr}");
+            assert!(stderr.ends_with("(run `blt check`)\n"), "{label}: {stderr}");
         }
         Reaction::Refused => {
             for args in [
@@ -4547,7 +4570,7 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
             ] {
                 let stderr = unchanged(&args);
                 assert!(
-                    stderr.starts_with("jig: ") && !stderr.contains(&abs),
+                    stderr.starts_with("blt: ") && !stderr.contains(&abs),
                     "{label} {args:?}: {stderr}"
                 );
             }
@@ -4571,10 +4594,11 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
                 assert!(o.status.success(), "{label}: show");
                 assert!(
                     String::from_utf8_lossy(&o.stdout)
-                        .contains(&format!("Documents: .jig/docs/{DMG_VICTIM}/"))
+                        .contains(&format!("Documents: .billet/docs/{DMG_VICTIM}/"))
                 );
                 assert!(
-                    String::from_utf8_lossy(&o.stderr).contains(&format!(".jig/docs/{DMG_VICTIM}"))
+                    String::from_utf8_lossy(&o.stderr)
+                        .contains(&format!(".billet/docs/{DMG_VICTIM}"))
                 );
             }
         }
@@ -4616,8 +4640,8 @@ fn check_damage(base: &Path, root: &Path, kind: jig::ProblemKind, index: usize, 
 
 fn check_journal(d: &Path, label: &str, dmg: &Damage) {
     let src = d.join(dmg_path(DMG_HEALTHY));
-    let dst = d.join(format!(".jig/closed/{DMG_HEALTHY}.md"));
-    let journal_file = d.join(".jig/.move");
+    let dst = d.join(format!(".billet/closed/{DMG_HEALTHY}.md"));
+    let journal_file = d.join(".billet/.move");
     if dmg.name == "corrupt journal lengths" {
         let o = run(d, &["ready"]);
         assert_eq!(o.status.code(), Some(1), "{label}");
@@ -4679,22 +4703,22 @@ fn check_entries(d: &Path) -> Vec<(String, String, String)> {
         .collect()
 }
 
-fn separate_damage(kind: jig::ProblemKind) -> Option<&'static str> {
-    use jig::ProblemKind as K;
+fn separate_damage(kind: billet::ProblemKind) -> Option<&'static str> {
+    use billet::ProblemKind as K;
     match kind {
         K::IssueDirectory | K::IssueDirectoryUnlistable => {
-            Some("replaces or locks .jig/closed, which the combined cases write to")
+            Some("replaces or locks .billet/closed, which the combined cases write to")
         }
         K::DocsDirectory | K::DocsUnlistable => {
-            Some("replaces or locks .jig/docs, which the combined cases write to")
+            Some("replaces or locks .billet/docs, which the combined cases write to")
         }
         K::MemoryFile | K::MemoryMissing | K::MemoryUnreadable => {
-            Some("the same .jig/memory.md as the combined MemoryMalformed case")
+            Some("the same .billet/memory.md as the combined MemoryMalformed case")
         }
         K::GitignoreFile | K::GitignoreMissing | K::GitignoreUnreadable => {
-            Some("the same .jig/.gitignore as the combined GitignoreLegacyRule case")
+            Some("the same .billet/.gitignore as the combined GitignoreLegacyRule case")
         }
-        K::PendingMove => Some("the same .jig/.move as the combined MoveJournal case"),
+        K::PendingMove => Some("the same .billet/.move as the combined MoveJournal case"),
         K::ConfigFile | K::ConfigMissing | K::ConfigInvalid => {
             Some("without a valid prefix every other case would show keys instead of handles")
         }
@@ -4703,10 +4727,10 @@ fn separate_damage(kind: jig::ProblemKind) -> Option<&'static str> {
 }
 
 fn check_all_damages_at_once(base: &Path, root: &Path) {
-    let mut plan: Vec<(jig::ProblemKind, &'static str, Damage)> = Vec::new();
+    let mut plan: Vec<(billet::ProblemKind, &'static str, Damage)> = Vec::new();
     let mut separated = Vec::new();
     let mut next = 10;
-    for kind in jig::ProblemKind::ALL {
+    for kind in billet::ProblemKind::ALL {
         if let Some(reason) = separate_damage(kind) {
             separated.push((kind, reason));
             continue;
@@ -4715,7 +4739,7 @@ fn check_all_damages_at_once(base: &Path, root: &Path) {
             continue;
         };
         for index in 0..list.len() {
-            let victim: &'static str = if kind == jig::ProblemKind::UnresolvedReference {
+            let victim: &'static str = if kind == billet::ProblemKind::UnresolvedReference {
                 DMG_VICTIM
             } else {
                 next += 1;
@@ -4725,7 +4749,7 @@ fn check_all_damages_at_once(base: &Path, root: &Path) {
             plan.push((kind, victim, dmg));
         }
     }
-    use jig::ProblemKind as K;
+    use billet::ProblemKind as K;
     assert_eq!(
         separated.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
         [
@@ -4780,7 +4804,7 @@ fn check_all_damages_at_once(base: &Path, root: &Path) {
     for (_, _, dmg) in &plan {
         (dmg.apply)(&d);
     }
-    let lock = d.join(".jig/.lock");
+    let lock = d.join(".billet/.lock");
     if lock.exists() {
         fs::remove_file(&lock).unwrap();
     }
@@ -4841,7 +4865,7 @@ fn damaged_registry_by_problem_kind() {
     let mut unseedable = Vec::new();
     std::thread::scope(|scope| {
         scope.spawn(|| check_all_damages_at_once(&base, &root));
-        for kind in jig::ProblemKind::ALL {
+        for kind in billet::ProblemKind::ALL {
             match damages(kind, DMG_VICTIM) {
                 Ok(list) => {
                     assert!(!list.is_empty(), "{kind:?} has no damage case");
@@ -4858,9 +4882,9 @@ fn damaged_registry_by_problem_kind() {
     assert_eq!(
         kinds,
         [
-            jig::ProblemKind::IssueEntryUnlistable,
-            jig::ProblemKind::DocsEntryUnlistable,
-            jig::ProblemKind::DocsEntryUninspectable,
+            billet::ProblemKind::IssueEntryUnlistable,
+            billet::ProblemKind::DocsEntryUnlistable,
+            billet::ProblemKind::DocsEntryUninspectable,
         ],
         "only these kinds may lack a seeded case: {unseedable:?}"
     );
@@ -4874,9 +4898,9 @@ fn usage_head(syntax: &str) -> String {
         .join(" ")
 }
 
-fn sample_argv(command: &jig::commands::CommandSpec, id: &str) -> Vec<String> {
-    use jig::commands::ArgType;
-    use jig::text::TextKind;
+fn sample_argv(command: &billet::commands::CommandSpec, id: &str) -> Vec<String> {
+    use billet::commands::ArgType;
+    use billet::text::TextKind;
     let mut argv = vec![command.name.to_string()];
     let mut positional = Vec::new();
     for arg in command.args.iter().filter(|arg| arg.required) {
@@ -4911,9 +4935,9 @@ fn check_command_contract(
     reg: &Path,
     noreg: &Path,
     help: &str,
-    command: &jig::commands::CommandSpec,
+    command: &billet::commands::CommandSpec,
 ) {
-    use jig::commands::{ArgType, JSON_CMDS};
+    use billet::commands::{ArgType, JSON_CMDS};
     let name = command.name;
     let label = |what: &str| format!("{name}: {what}");
     let refusal = |args: &[String], dir: &Path, code: i32, stderr: &str, what: &str| {
@@ -4944,13 +4968,13 @@ fn check_command_contract(
 
     let argv = sample_argv(command, &s.open);
     let mcp = name == "mcp";
-    let mcp_refusal = "jig: mcp does not accept arguments\n";
+    let mcp_refusal = "blt: mcp does not accept arguments\n";
     if !matches!(name, "init" | "mcp") {
         refusal(
             &sample_argv(command, "1e0001"),
             noreg,
             1,
-            "jig: no .jig registry found; run `jig init` in the project root\n",
+            "blt: no .billet registry found; run `blt init` in the project root\n",
             "refusal without a registry",
         );
     }
@@ -4961,7 +4985,7 @@ fn check_command_contract(
         if mcp {
             mcp_refusal
         } else {
-            "jig: unknown option --bogus\n"
+            "blt: unknown option --bogus\n"
         },
         "unknown option",
     );
@@ -4981,7 +5005,7 @@ fn check_command_contract(
             &prefixed,
             reg,
             2,
-            &format!("jig: --json is not valid for `{name}`\n"),
+            &format!("blt: --json is not valid for `{name}`\n"),
             "--json prefix",
         );
         refusal(
@@ -4991,7 +5015,7 @@ fn check_command_contract(
             if mcp {
                 mcp_refusal
             } else {
-                "jig: unknown option --json\n"
+                "blt: unknown option --json\n"
             },
             "--json after the command",
         );
@@ -5008,10 +5032,10 @@ fn check_command_contract(
     extra.extend((0..=positional - required).map(|_| "extra".to_string()));
     let expected_extra = match (mcp, positional, name) {
         (true, _, _) => mcp_refusal.to_string(),
-        (_, 0, "init") => "jig: expected no positional arguments\n".to_string(),
-        (_, 0, _) => "jig: expected no arguments\n".to_string(),
-        (_, _, "recall") => "jig: expected at most one topic\n".to_string(),
-        _ => format!("jig: expected {head}\n"),
+        (_, 0, "init") => "blt: expected no positional arguments\n".to_string(),
+        (_, 0, _) => "blt: expected no arguments\n".to_string(),
+        (_, _, "recall") => "blt: expected at most one topic\n".to_string(),
+        _ => format!("blt: expected {head}\n"),
     };
     refusal(&extra, reg, 2, &expected_extra, "extra positional argument");
     if required > 0 {
@@ -5019,7 +5043,7 @@ fn check_command_contract(
             &[name.to_string()],
             reg,
             2,
-            &format!("jig: expected {head}\n"),
+            &format!("blt: expected {head}\n"),
             "missing argument",
         );
     }
@@ -5038,14 +5062,14 @@ fn check_command_contract(
                 assert_eq!(o.status.code(), Some(2), "{} {value:?}", label(flag));
                 assert_eq!(
                     String::from_utf8_lossy(&o.stderr),
-                    format!("jig: invalid priority {value:?}; expected 0..=4\n"),
+                    format!("blt: invalid priority {value:?}; expected 0..=4\n"),
                     "{}",
                     label(flag)
                 );
             }
         }
         for value in ["0", "1", "2", "3", "4"] {
-            let slot = jig::commands::COMMANDS
+            let slot = billet::commands::COMMANDS
                 .iter()
                 .position(|c| c.name == name)
                 .unwrap();
@@ -5082,7 +5106,7 @@ fn check_command_contract(
     assert!(
         reference
             .lines()
-            .any(|line| line == format!("jig {name}") || line.starts_with(&format!("jig {name} "))),
+            .any(|line| line == format!("blt {name}") || line.starts_with(&format!("blt {name} "))),
         "{}",
         label("README command reference has no line")
     );
@@ -5090,7 +5114,7 @@ fn check_command_contract(
 
 #[test]
 fn every_command_contract() {
-    use jig::commands::COMMANDS;
+    use billet::commands::COMMANDS;
     let s = seeded("commands");
     let reg = &s.base;
     let noreg = s.dir.join("noreg");
@@ -5118,23 +5142,23 @@ fn command_contract_globals(reg: &Path, help: &str) {
     }
     assert_eq!(
         ok(reg, &["--version"]),
-        format!("jig {}\n", env!("CARGO_PKG_VERSION"))
+        format!("blt {}\n", env!("CARGO_PKG_VERSION"))
     );
     for (args, stderr) in [
         (
             &["--", "--help"][..],
-            "jig: unknown command --help; try `jig --help`\n",
+            "blt: unknown command --help; try `blt --help`\n",
         ),
-        (&["--"][..], "jig: missing command; try `jig --help`\n"),
-        (&["--json"][..], "jig: missing command; try `jig --help`\n"),
-        (&["--bogus", "list"][..], "jig: unknown option --bogus\n"),
+        (&["--"][..], "blt: missing command; try `blt --help`\n"),
+        (&["--json"][..], "blt: missing command; try `blt --help`\n"),
+        (&["--bogus", "list"][..], "blt: unknown option --bogus\n"),
         (
             &["--json", "--json", "ready"][..],
-            "jig: duplicate option --json\n",
+            "blt: duplicate option --json\n",
         ),
         (
             &["request-changes", "1e0001"][..],
-            "jig: unknown command request-changes; try `jig --help`\n",
+            "blt: unknown command request-changes; try `blt --help`\n",
         ),
     ] {
         let o = run(reg, args);
@@ -5150,7 +5174,7 @@ fn command_contract_globals(reg: &Path, help: &str) {
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&o.stderr),
-        "jig: update requires at least one change\n"
+        "blt: update requires at least one change\n"
     );
 
     let d = reg.parent().unwrap().join("wire");
@@ -5229,12 +5253,12 @@ fn grouped_and_flat_lists(s: &Seeded) {
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&o.stderr),
-        "jig: invalid status filter \"active\"; expected proposed|open|claimed|review|closed|all\n"
+        "blt: invalid status filter \"active\"; expected proposed|open|claimed|review|closed|all\n"
     );
 }
 
 fn crew(dir: &Path, args: &[&str]) -> Output {
-    let bin = Path::new(env!("CARGO_BIN_EXE_jig")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_blt")).parent().unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     Command::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("crew/bin/crew"))
         .args(args)
@@ -5299,7 +5323,7 @@ fn crew_review_loop() {
     let sub = d.join("sub");
     fs::create_dir(&sub).unwrap();
     let key = key_of(&d, &id);
-    let round = |n: u32| format!(".jig/docs/{key}/review/round-{n:02}");
+    let round = |n: u32| format!(".billet/docs/{key}/review/round-{n:02}");
     let roles = [
         ("developer", "# Role: developer"),
         ("auditor", "# Role: auditor\n"),
@@ -5315,7 +5339,7 @@ fn crew_review_loop() {
                 "{role} output and the {name} instructions:\n{out}"
             );
         }
-        assert!(out.contains("# jig-crew: rules for every role"));
+        assert!(out.contains("# billet-crew: rules for every role"));
         assert_eq!(
             out.contains("# Auditing rules"),
             ["auditor", "cross-check", "lead"].contains(&role)
@@ -5332,7 +5356,7 @@ fn crew_review_loop() {
     let out = crew_ok(&sub, &["architect", &proposal]);
     only_role(&out, "architect");
     assert!(!out.contains("Round:"), "{out}");
-    let architecture = format!(".jig/docs/{}/architecture.md", key_of(&d, &proposal));
+    let architecture = format!(".billet/docs/{}/architecture.md", key_of(&d, &proposal));
     assert!(
         out.contains(&format!("Write: {architecture} (created)")),
         "{out}"
@@ -5416,7 +5440,7 @@ fn crew_review_loop() {
         assert!(out.contains(&format!("{}/{report} (auditor report)", round(1))));
     }
     assert!(out.contains(&format!(
-        "jig rework {id} --reason \"round 01: see {}/decision.md\"",
+        "blt rework {id} --reason \"round 01: see {}/decision.md\"",
         round(1)
     )));
     let out = crew_ok(&sub, &["audit", &id, "a3", "--cross-check"]);
@@ -5442,7 +5466,7 @@ fn crew_review_loop() {
 fn crew_install_and_uninstall() {
     let home = dir("crewhome");
     let custom = dir("crewclaude");
-    let bin = Path::new(env!("CARGO_BIN_EXE_jig")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_blt")).parent().unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("crew");
     let install = |args: &[&str], claude_dir: Option<&Path>| {
@@ -5457,14 +5481,14 @@ fn crew_install_and_uninstall() {
         }
         command.output().unwrap()
     };
-    let claude = home.join(".claude/skills/jig-crew");
-    let codex = home.join(".agents/skills/jig-crew");
+    let claude = home.join(".claude/skills/billet-crew");
+    let codex = home.join(".agents/skills/billet-crew");
 
     fs::create_dir_all(&codex).unwrap();
     fs::write(codex.join("notes.md"), "mine\n").unwrap();
     let refused = install(&[], None);
     assert_eq!(refused.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&refused.stdout).contains("not a jig-crew skill"));
+    assert!(String::from_utf8_lossy(&refused.stdout).contains("not a billet-crew skill"));
     assert!(codex.join("notes.md").is_file());
     fs::remove_dir_all(&codex).unwrap();
 
@@ -5514,8 +5538,8 @@ fn crew_install_and_uninstall() {
 
     let o = install(&["--claude"], Some(&custom));
     assert!(o.status.success());
-    let skill = fs::read_to_string(custom.join("skills/jig-crew/SKILL.md")).unwrap();
-    let crew_path = format!("{}/skills/jig-crew/bin/crew", custom.display());
+    let skill = fs::read_to_string(custom.join("skills/billet-crew/SKILL.md")).unwrap();
+    let crew_path = format!("{}/skills/billet-crew/bin/crew", custom.display());
     assert!(
         skill.contains(&format!("allowed-tools: Bash({crew_path}:*)")),
         "{skill}"
@@ -5537,7 +5561,7 @@ fn numbers_follow_the_configured_prefix() {
     let d = dir("numbers");
     ok(&d, &["init", "--no-hooks"]);
     assert_eq!(
-        fs::read_to_string(d.join(".jig/config.json")).unwrap(),
+        fs::read_to_string(d.join(".billet/config.json")).unwrap(),
         "{\n  \"prefix\": \"B\"\n}\n"
     );
     let first = add(&d, "first");
@@ -5548,10 +5572,11 @@ fn numbers_follow_the_configured_prefix() {
         ["B1", "B2", "B1.1"]
     );
     let key = key_of(&d, "B1");
-    assert!(jig::issue::valid_key(&key), "{key}");
-    let file = fs::read_to_string(d.join(format!(".jig/open/{key}.md"))).unwrap();
+    assert!(billet::issue::valid_key(&key), "{key}");
+    let file = fs::read_to_string(d.join(format!(".billet/open/{key}.md"))).unwrap();
     assert!(file.lines().any(|l| l == "number: 1"), "{file}");
-    let child = fs::read_to_string(d.join(format!(".jig/open/{}.md", key_of(&d, "B1.1")))).unwrap();
+    let child =
+        fs::read_to_string(d.join(format!(".billet/open/{}.md", key_of(&d, "B1.1")))).unwrap();
     assert!(child.lines().any(|l| l == "number: null"), "{child}");
     for reference in ["B1", "b1", "1", key.as_str()] {
         assert_eq!(show_value(&d, reference)["id"], "B1", "{reference}");
@@ -5560,11 +5585,11 @@ fn numbers_follow_the_configured_prefix() {
     ok(&d, &["close", &second, "--reason", "done"]);
     assert_eq!(add(&d, "third"), "B3", "closed issues keep their numbers");
     let e = bad(&d, &["update", "B1", "--number", "3"]);
-    assert_eq!(e, "jig: number B3 is already used\n");
+    assert_eq!(e, "blt: number B3 is already used\n");
     let e = bad(&d, &["update", "B1.1", "--number", "9"]);
     assert_eq!(
         e,
-        "jig: B1.1 is a subtask; its number comes from its root\n"
+        "blt: B1.1 is a subtask; its number comes from its root\n"
     );
     assert_eq!(ok(&d, &["update", "B1", "--number", "10"]), "updated B10\n");
     assert_eq!(
@@ -5576,13 +5601,13 @@ fn numbers_follow_the_configured_prefix() {
         .unwrap()
         .to_string();
     assert!(history.ends_with("number: B1 -> B10"), "{history}");
-    assert_eq!(bad(&d, &["show", "B1"]), "jig: issue B1 not found\n");
+    assert_eq!(bad(&d, &["show", "B1"]), "blt: issue B1 not found\n");
     assert_eq!(
         add(&d, "fourth"),
         "B11",
         "the next number follows the largest"
     );
-    let fourth = d.join(format!(".jig/open/{}.md", key_of(&d, "B11")));
+    let fourth = d.join(format!(".billet/open/{}.md", key_of(&d, "B11")));
     let text = fs::read_to_string(&fourth).unwrap();
     fs::write(
         &fourth,
@@ -5596,7 +5621,7 @@ fn numbers_follow_the_configured_prefix() {
     );
     fs::write(&fourth, text).unwrap();
 
-    fs::write(d.join(".jig/config.json"), "{\"prefix\": \"AN-\"}\n").unwrap();
+    fs::write(d.join(".billet/config.json"), "{\"prefix\": \"AN-\"}\n").unwrap();
     assert_eq!(show_value(&d, "an-10.1")["id"], "AN-10.1");
     assert!(ok(&d, &["list"]).contains("  AN-11 open 2 - fourth\n"));
 

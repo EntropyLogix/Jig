@@ -224,7 +224,7 @@ impl Eligibility {
         }
         let mut result = parts.join("; ");
         if check_hint && !self.unresolved.is_empty() {
-            result.push_str(" (run `jig check`)");
+            result.push_str(" (run `blt check`)");
         }
         result
     }

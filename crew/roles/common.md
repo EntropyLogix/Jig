@@ -1,4 +1,4 @@
-# jig-crew: rules for every role
+# billet-crew: rules for every role
 
 Reply in the language of the issue description of {{ID}}, every message to
 the person included, the final one too. Change language only when the
@@ -9,7 +9,7 @@ in the same language. Keep code, commands, identifiers, paths, and quoted
 output exactly as they are, keep the template's headings unchanged, and
 do not add sections the template does not have.
 
-You play one role in a review loop on Jig issue {{ID}}. The header above,
+You play one role in a review loop on Billet issue {{ID}}. The header above,
 printed by crew, is the source of truth for the issue, the round, the files
 to read, and the files you may write.
 
@@ -24,7 +24,7 @@ to read, and the files you may write.
 - **Evidence.** Documents written by other roles are claims, not evidence.
   Base every statement you make on something you read in the code or ran
   yourself, and say which.
-- **Jig.** Reading is always allowed (`jig show`, `list`, `tree`, `ready`,
+- **Billet.** Reading is always allowed (`blt show`, `list`, `tree`, `ready`,
   `recall`). Of the commands that change the registry, run only those your
   role names. Approving, revising, closing, reopening, and releasing issues
   belong to people.

@@ -35,16 +35,16 @@ pub fn render(prefix: &str) -> String {
     format!("{{\n  \"prefix\": {}\n}}\n", issue::esc(prefix))
 }
 
-pub fn load(jig: &Path) -> Result<Config, String> {
-    read(jig).map_err(|e| format!(".jig/config.json: {e}"))
+pub fn load(billet: &Path) -> Result<Config, String> {
+    read(billet).map_err(|e| format!(".billet/config.json: {e}"))
 }
 
-pub fn read(jig: &Path) -> Result<Config, String> {
-    let path = jig.join(FILE);
+pub fn read(billet: &Path) -> Result<Config, String> {
+    let path = billet.join(FILE);
     match fs::read_to_string(&path) {
         Ok(text) => parse(&text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err("missing; run `jig init`".to_string())
+            Err("missing; run `blt init`".to_string())
         }
         Err(e) => Err(format!("cannot read: {e}")),
     }

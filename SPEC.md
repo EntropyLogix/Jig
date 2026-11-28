@@ -1,57 +1,56 @@
-# Jig v1
+# Billet v1
 
-Jig is a file-based issue tracker and project memory for people and
-coding agents. The executable is `jig`. This document records the agreed
+Billet is a file-based issue tracker and project memory for people and
+coding agents. The executable is `blt`. This document records the agreed
 contract and acceptance checks for v1.
 
 ## Agreed Contract
 
 ### Installation And Project Discovery
 
-- Install `jig` once per user and machine, on `PATH`. The project lives at
-  `https://github.com/EntropyLogix/Jig`; the package, library, and binary
-  are all named `jig`. Machine-local state lives under
-  `$XDG_STATE_HOME/jig` (or `~/.local/state/jig`).
-- `jig init`, run in the project root, creates `.jig/`. Subsequent commands
+- Install `blt` once per user and machine, on `PATH`. The project lives at
+  `https://github.com/EntropyLogix/Billet`; the package and library are named
+  `billet` and the binary `blt`. Machine-local state lives under
+  `$XDG_STATE_HOME/billet` (or `~/.local/state/billet`).
+- `blt init`, run in the project root, creates `.billet/`. Subsequent commands
   find it by walking up from the current directory. Without a registry in the
   current project, report an error. No path argument, project override,
   machine-local project config, or redirect to another checkout is needed.
-  `jig start` does not need to print the absolute path on each run.
-- `jig init [--no-hooks]` also installs the approved agent integration by
-  default: a marker-delimited `## Issue tracking with Jig` block in
+  `blt start` does not need to print the absolute path on each run.
+- `blt init [--no-hooks]` also installs the approved agent integration by
+  default: a marker-delimited `## Issue tracking with Billet` block in
   the project's `AGENTS.md` (see Agent Instructions Block), and a
   project-local SessionStart hook running
-  `jig start --hook-json` merged into `.claude/settings.json` and
+  `blt start --hook-json` merged into `.claude/settings.json` and
   `.codex/hooks.json`. The merge inserts only the new hook group into the
   existing text: every other byte of the file, including key order,
   indentation, and whitespace, stays unchanged. A missing file is created
   with only the required structure. The merge refuses malformed files
   instead of rewriting them, and is idempotent.
   `--no-hooks` skips the hook configuration only; it is not an uninstall
-  and `AGENTS.md` is still updated. `jig` must be on `PATH` for the clients;
+  and `AGENTS.md` is still updated. `blt` must be on `PATH` for the clients;
   users confirm the hook once via `/hooks` (Codex) or the client's own
-  project trust. The hook payload is the static `jig start` workflow text
+  project trust. The hook payload is the static `blt start` workflow text
   only, including sessions resumed or compacted via SessionStart — never
-  issue or memory contents — and `jig` performs no Git hooks or other
+  issue or memory contents — and `blt` performs no Git hooks or other
   runtime hook operations.
 - There is no database, central service, or mandatory Git integration.
   Each checkout sees its own files. If you use Git, commit and synchronize
-  those files like any other project files. `jig` does not run Git, commit,
+  those files like any other project files. `blt` does not run Git, commit,
   push, install Git hooks, or require a dedicated branch.
 
 ### Files, IDs, And Concurrent Work
 
 - There is one Markdown file per issue, with YAML frontmatter and a
-  human-readable body. Active statuses (`proposed`, `open`, `claimed`,
-  `review`) live in `.jig/open/`; closed issues live in `.jig/closed/`. The
-  archive can be browsed without `jig`. Closing and reopening move the file,
-  not its ID.
+  human-readable body. Active statuses (`proposed`, `open`, `claimed`, `review`)
+  live in `.billet/open/`; closed issues live in `.billet/closed/`. The archive
+  can be browsed without `blt`. Closing and reopening move the file, not its ID.
 - Every issue has two identifiers with separate jobs. The **key** is the
   internal, random identity: it names the file, the documents directory,
   and every reference in `parent` and `depends_on`. The **handle** is what
   people and agents read and write: the project's prefix followed by the
   issue's number (`B494`), and for a subtask its root's handle plus the
-  dotted part of its key (`B494.2`). Jig shows handles everywhere except
+  dotted part of its key (`B494.2`). Billet shows handles everywhere except
   inside paths; an issue whose number cannot be read (a missing or
   unreadable root) is shown by its key.
 - A top-level key is six lowercase hex digits that start with a digit and
@@ -62,15 +61,15 @@ contract and acceptance checks for v1.
   directories under the lock and retry on a local collision.
 - `add` gives a top-level issue the largest number in the registry, open
   and closed, plus one, under the lock; numbers are never reused. The
-  `number:` line of a file Jig cannot read still counts, so repairing that
+  `number:` line of a file Billet cannot read still counts, so repairing that
   file never creates a duplicate. Copies edited independently may assign
   the same number; identity stays intact because keys differ. A handle
   that matches two issues is refused and names every match; `list`,
   `ready`, and `tree` warn once per duplicate; `check` reports it. A person
-  fixes it with `jig update ID --number N` (an unused number, on a
+  fixes it with `blt update ID --number N` (an unused number, on a
   top-level issue, recorded in the history); agents do not renumber.
-- The prefix is the project setting `prefix` in `.jig/config.json`
-  (`{"prefix": "B"}`), written by `jig init [--prefix P]` with default `B`:
+- The prefix is the project setting `prefix` in `.billet/config.json`
+  (`{"prefix": "B"}`), written by `blt init [--prefix P]` with default `B`:
   1 to 8 uppercase ASCII letters, optionally followed by `-` (`B`, `AN`,
   `AN-`). Handles are derived, so changing the prefix changes every handle
   at once. A missing or invalid configuration stops every command except
@@ -85,13 +84,13 @@ contract and acceptance checks for v1.
   number after the largest direct child under the lock, including closed
   children. A closed child does not free its number.
 - Writes use a local lock and atomic file replacement. Processes using the
-  same `.jig/` cannot both claim the same issue. Independently edited copies
+  same `.billet/` cannot both claim the same issue. Independently edited copies
   may conflict after synchronization; we accept that rather than partition
   the queue. Do not silently overwrite an issue, renumber one side, or pick
   the newest claim by timestamp. When a conflict is present in the files,
   surface it for explicit resolution.
 - Humans may read and edit the Markdown directly, provided no one else is
-  writing the same issue at the time. Agents make changes through `jig`,
+  writing the same issue at the time. Agents make changes through `blt`,
   except issue documents, which they write directly (see Issue Documents).
 
 ### Issue Workflow
@@ -136,7 +135,7 @@ contract and acceptance checks for v1.
   parsed, whose dotted ID in the file name does. `ready` skips such an
   issue, still lists every other eligible issue, prints one
   warning per skipped issue to stderr naming the unresolved reference and
-  pointing to `jig check`, and exits 0. JSON on stdout keeps its normal
+  pointing to `blt check`, and exits 0. JSON on stdout keeps its normal
   shape. `claim` of such an issue fails as before, naming the unusable
   file; `--force` does not bypass it.
 - Every refusal and every skip names its cause, so it never has to be
@@ -147,7 +146,7 @@ contract and acceptance checks for v1.
   every reason, in this order and joined by `; `: `status S` when the
   issue is not `open`, `deferred until DATE` (with `by ancestor ID` when
   inherited), `unresolved REF` for a missing or unusable blocker, ancestor,
-  or descendant (followed once by a pointer to `jig check`), where REF
+  or descendant (followed once by a pointer to `blt check`), where REF
   names the role and the cause: `blocker ID (missing)`, `ancestor ID
   (missing)`, `blocker ID (unusable PATH)`, `ancestor ID (unusable PATH)`,
   or `subtask PATH (unusable)`, with PATH relative to the project root;
@@ -160,7 +159,7 @@ contract and acceptance checks for v1.
 - `list` and `tree` never fail as a whole because of one bad issue file
   (unreadable, conflicted, duplicated, or in the wrong directory). They
   list every readable issue, print one warning per skipped file to stderr
-  pointing to `jig check`, and exit 0 with JSON on stdout in its normal
+  pointing to `blt check`, and exit 0 with JSON on stdout in its normal
   shape. `tree` of an ID whose own file is unusable fails, and `show` of
   such an ID fails as before. An issue with inconsistent fields (see
   Registry Check) is readable: `list`, `tree`, and `show` include it, and
@@ -228,13 +227,13 @@ contract and acceptance checks for v1.
   it with that round's history entry. `close ID --reason TEXT` also accepts
   optional `--summary TEXT`. Put it in `## Closing Summary` before the full
   description for easy browsing without the CLI. Keep the reason in
-  `## History` and the full description, notes, and history in `.jig/closed/`
+  `## History` and the full description, notes, and history in `.billet/closed/`
   whether or not a summary was supplied. Show the summary with the full
   issue, not in `start`, `ready`, or default lists. No summary-only view
   is needed in v1.
-- Closing summaries are additive. Jig never replaces or shortens
+- Closing summaries are additive. Billet never replaces or shortens
   existing issue content when closing or archiving an issue.
-- `jig note ID TEXT [--by NAME]` appends to `## Notes` in the issue file, with
+- `blt note ID TEXT [--by NAME]` appends to `## Notes` in the issue file, with
   UTC date and time and an author if supplied. A new note is one line of at
   most 500 characters. Reject longer or multiline input without truncation.
   The limit does not affect imported text or the total size of an issue.
@@ -244,29 +243,29 @@ contract and acceptance checks for v1.
 
 - Long material that belongs to one issue — analyses, review or audit
   reports, measurements, instructions for an implementer — lives in
-  `.jig/docs/KEY/`, where `KEY` is the issue's key (dotted subtask keys
+  `.billet/docs/KEY/`, where `KEY` is the issue's key (dotted subtask keys
   included), so renumbering never moves documents. Any files and
   subdirectories may be stored there; Markdown is
   the convention. The description references the documents that matter;
   it stays the contract.
-- `jig` has no command that creates, edits, or removes documents; people
+- `blt` has no command that creates, edits, or removes documents; people
   and agents write the files directly. `init` does not create `docs/`, and
   a missing `docs/` is not a problem.
 - The directory belongs to the key, not to a status or a number: closing,
-  reopening, renumbering, and every other change leave `.jig/docs/KEY/`
+  reopening, renumbering, and every other change leave `.billet/docs/KEY/`
   where it is.
-- `show ID` ends with a `Documents: .jig/docs/KEY/` line naming the
+- `show ID` ends with a `Documents: .billet/docs/KEY/` line naming the
   directory even when it does not exist yet, followed by the regular files
   under it, recursively, as paths relative to the project root (for example
-  `.jig/docs/5a3f35/analysis.md`), sorted, or by `(none)` on the same line
+  `.billet/docs/5a3f35/analysis.md`), sorted, or by `(none)` on the same line
   when there are none. It does not print their contents. JSON adds
   `docs_dir` (the directory path) and `docs`, an array of the file paths
   (`[]` when there are none).
-- A broken document location never hides the issue. When `.jig/docs` or
-  `.jig/docs/KEY` is not a real directory, or part of it cannot be read,
+- A broken document location never hides the issue. When `.billet/docs` or
+  `.billet/docs/KEY` is not a real directory, or part of it cannot be read,
   `show` still prints the issue and its `Documents:` line (JSON with the
   files it could list), warns on stderr with the path relative to the
-  project root and a pointer to `jig check`, and exits 0. `check` reports
+  project root and a pointer to `blt check`, and exits 0. `check` reports
   the location.
 
 ### Agent Context And Project Memory
@@ -275,7 +274,7 @@ contract and acceptance checks for v1.
   show compact views, including in JSON. `show ID` opens one full issue,
   regardless of whether it is in `open/` or `closed/`. Keep results,
   decisions, and references to evidence, not session transcripts or logs.
-- `.jig/memory.md` is a human-readable store of current facts, not a cache
+- `.billet/memory.md` is a human-readable store of current facts, not a cache
   or append-only log. `remember TOPIC TEXT` updates one named fact, `recall
   TOPIC` reads one fact, and `recall` with no topic lists only the names.
   No automatic key generation or `--key` is needed. `start` never loads the
@@ -283,70 +282,70 @@ contract and acceptance checks for v1.
 
 ### Agent Instructions Block
 
-- The block is delimited by `<!-- BEGIN JIG v:N hash:H -->` and
-  `<!-- END JIG -->`, where `N` is the block format version and `H` is a
-  short hash of the text between the markers as `jig` wrote it.
+- The block is delimited by `<!-- BEGIN BILLET v:N hash:H -->` and
+  `<!-- END BILLET -->`, where `N` is the block format version and `H` is a
+  short hash of the text between the markers as `blt` wrote it.
 - `init` appends the block when no markers exist. When the markers exist
   and the hash matches the text, the block is unmodified: `init` replaces
   an older version with the current one and leaves a current one alone.
   When the hash does not match, a person edited the block: `init` leaves
   it untouched and reports that it is customized. A block of a newer
-  version than this `jig` supports is left untouched. Malformed or
+  version than this `blt` supports is left untouched. Malformed or
   duplicated markers refuse the edit, as before.
 - `check` reports a missing block and an outdated unmodified block (hint:
-  `jig init`). A customized block of the current version is not a problem.
+  `blt init`). A customized block of the current version is not a problem.
   A customized block of an older version is reported with the hint to
-  remove the block, run `jig init`, and reapply the local edits. A block of
-  a newer version is reported with the hint to update `jig`.
+  remove the block, run `blt init`, and reapply the local edits. A block of
+  a newer version is reported with the hint to update `blt`.
 - Whenever `init` leaves an existing block untouched in a state that
   `check` reports, `init` prints the same problem and hint, prefixed with
   `AGENTS.md:`, and still exits 0. A refusal also names `AGENTS.md`.
 - The block text of a released version `N` never changes. Any change to the
-  text, apart from the substituted `jig` version, comes with `N + 1`.
+  text, apart from the substituted `blt` version, comes with `N + 1`.
 - The block text tells agents, in this order:
-  - the project tracks work with `jig` and keeps no task lists in other
+  - the project tracks work with `blt` and keeps no task lists in other
     Markdown or TODO files; the agent's built-in todo or plan tool holds
     only the steps of the current task, and anything that must outlive the
-    session goes to `jig`;
-  - `jig` comes from `https://github.com/EntropyLogix/Jig`; if it is not
+    session goes to `blt`;
+  - `blt` comes from `https://github.com/EntropyLogix/Billet`; if it is not
     installed, ask a person to install it with
-    `cargo install --locked --git https://github.com/EntropyLogix/Jig --tag vX.Y.Z`,
-    where `X.Y.Z` is the version of `jig` that wrote the block;
-  - run `jig start`; `jig ready` lists approved, unblocked work; `jig show ID`
+    `cargo install --locked --git https://github.com/EntropyLogix/Billet --tag vX.Y.Z`,
+    where `X.Y.Z` is the version of `blt` that wrote the block;
+  - run `blt start`; `blt ready` lists approved, unblocked work; `blt show ID`
     reads one issue; an issue authorizes only its described scope; refer to
-    issues by the handle `jig` prints, in commands and in messages, and a
+    issues by the handle `blt` prints, in commands and in messages, and a
     person may give only the number;
-  - claim before working with `jig claim ID --by NAME` using the agent's
+  - claim before working with `blt claim ID --by NAME` using the agent's
     name; `--force` only on a person's explicit instruction for that issue;
-  - submit with `jig review ID --summary TEXT`; approving, revising,
+  - submit with `blt review ID --summary TEXT`; approving, revising,
     returning for rework, and closing are for people unless a person
     explicitly says otherwise for that issue;
-  - work found along the way becomes `jig add TITLE --body TEXT` (a
-    proposal, not work) plus a `jig note` on the issue where it was found;
+  - work found along the way becomes `blt add TITLE --body TEXT` (a
+    proposal, not work) plus a `blt note` on the issue where it was found;
   - the issue description is the current contract: rewrite it with
-    `jig update ID --body -` as decisions change instead of appending, and
+    `blt update ID --body -` as decisions change instead of appending, and
     write long analyses and reports directly in the `Documents:` directory
-    from `jig show ID`, not in other directories;
-  - a part of an issue's work becomes a subtask (`jig add TITLE --parent ID
+    from `blt show ID`, not in other directories;
+  - a part of an issue's work becomes a subtask (`blt add TITLE --parent ID
     --body TEXT`), separate work that must happen first becomes a blocker
-    (`jig dep add`); a parent is ready only after its subtasks close; `jig dep add ID BLOCKER`
+    (`blt dep add`); a parent is ready only after its subtasks close; `blt dep add ID BLOCKER`
     means ID waits for BLOCKER, and a closed blocker stops blocking without
     removing the link; when the agent's issue needs other work first, it
-    adds that work as a subtask or as a blocker, leaves a `jig note`, and
-    runs `jig unclaim ID`; it removes a dependency with `jig dep rm` only to
-    undo its own mistake, with a `jig note`;
-  - when stopping before the work is done, leave a `jig note` and run
-    `jig unclaim ID` if the agent will not continue;
-  - read project facts with `jig recall [TOPIC]`, record durable project
-    facts with `jig remember TOPIC TEXT`, and keep personal preferences in
+    adds that work as a subtask or as a blocker, leaves a `blt note`, and
+    runs `blt unclaim ID`; it removes a dependency with `blt dep rm` only to
+    undo its own mistake, with a `blt note`;
+  - when stopping before the work is done, leave a `blt note` and run
+    `blt unclaim ID` if the agent will not continue;
+  - read project facts with `blt recall [TOPIC]`, record durable project
+    facts with `blt remember TOPIC TEXT`, and keep personal preferences in
     the agent's own memory;
-  - if `jig ready` warns or lists nothing, run `jig check` and report to a
+  - if `blt ready` warns or lists nothing, run `blt check` and report to a
     person; never remove dependencies or approve proposals to get unblocked.
-- The `jig start` workflow text states the same rules.
+- The `blt start` workflow text states the same rules.
 
 ### Registry Check
 
-- `jig check [--json]` reports every integrity problem in one run instead
+- `blt check [--json]` reports every integrity problem in one run instead
   of stopping at the first: unreadable issue files, a file name that does
   not match the ID, a status that does not belong in its directory,
   duplicate IDs, merge conflict markers, missing blockers or ancestors,
@@ -354,17 +353,17 @@ contract and acceptance checks for v1.
   `open` issue with `claim_id` or `assignee`, a `claimed` issue without
   `claim_id`, or `closed_at`, `release`, or a closing summary on an active
   issue), a pending or mismatched move record, an unreadable `memory.md`,
-  a missing or invalid `.jig/config.json`, a number used by two issues,
-  unexpected files in `open/` or `closed/`, an entry in `.jig/docs/` that
+  a missing or invalid `.billet/config.json`, a number used by two issues,
+  unexpected files in `open/` or `closed/`, an entry in `.billet/docs/` that
   is not a directory or is not named after an existing issue key (hint:
   rename it to the issue key or remove it), and the legacy
-  `/.*.tmp-*` rule in `.jig/.gitignore`.
+  `/.*.tmp-*` rule in `.billet/.gitignore`.
 - Unknown legacy metadata is not a problem: a `closed` issue may have
   `closed_at: null`, and an issue in `review` may have no `assignee` or
   `claim_id` if it was never claimed. `rework` of such an issue assigns a
   new `claim_id` and invents no assignee.
 - Each problem names the file, what is wrong, and a concrete way to
-  resolve it (a `jig` command or the manual edit or Git action). JSON is an
+  resolve it (a `blt` command or the manual edit or Git action). JSON is an
   array of `{path,problem,hint}`. Exit 0 when clean, 1 otherwise.
 - `check` only reports. It never modifies, repairs, or finishes a pending
   move; every resolution is an explicit human decision. Agents run `check`
@@ -373,7 +372,7 @@ contract and acceptance checks for v1.
 
 ### MCP Server
 
-- `jig mcp` is a Model Context Protocol server over stdio in the same
+- `blt mcp` is a Model Context Protocol server over stdio in the same
   binary. The client starts it and ends it with the session; there is no
   daemon, port, or background service. It is optional and meant for
   agents without a shell or for clients where a person approves tool calls;
@@ -401,19 +400,19 @@ contract and acceptance checks for v1.
 - Read tools (`ready`, `show`, `list`, `tree`, `check`, `recall`, `start`)
   carry `readOnlyHint: true`. The description of every tool for a person's
   decision (`approve`, `revise`, `rework`, `close`, `reopen`, `release`,
-  `init`) starts with "A person's decision:". Jig enforces no permissions;
+  `init`) starts with "A person's decision:". Billet enforces no permissions;
   the client's per-tool approval is where a person confirms such a call.
 - The server implements MCP revision `2025-06-18` and answers
   `initialize` with that `protocolVersion` whatever the client requested,
   leaving the decision to the client as the protocol prescribes.
-  `initialize` returns as `instructions` the `jig start` workflow text
+  `initialize` returns as `instructions` the `blt start` workflow text
   followed by one MCP-only paragraph: use these tools instead of running
-  `jig` in the shell, each tool mirrors the command of the same name, and a
+  `blt` in the shell, each tool mirrors the command of the same name, and a
   person's refusal of a tool call is final and is not retried through the
   shell. Only agents connected to the server see that paragraph; the
-  `AGENTS.md` block and `jig start` do not mention MCP. `initialize` also
-  returns `serverInfo` with name `jig` and the package version. The server answers
-  `ping`, accepts and ignores notifications it does not use, rejects
+  `AGENTS.md` block and `blt start` do not mention MCP. `initialize` also
+  returns `serverInfo` with name `billet` and the package version. The server
+  answers `ping`, accepts and ignores notifications it does not use, rejects
   unknown methods with `-32601`, and writes nothing but JSON-RPC messages
   to stdout. `init` does not register the server with any client; the
   README shows the entries for Claude Code, Codex, and EntropyForge.
@@ -429,7 +428,7 @@ contract and acceptance checks for v1.
   `priority`, `parent`, `depends_on`, `assignee`, `defer_until`, `created_at`,
   `updated_at`, `closed_at`, and `release`. Add a nullable `claim_id` to
   distinguish independent claims, even with identical or absent assignee
-  labels. Jig always writes the fields in this order and reads them in any
+  labels. Billet always writes the fields in this order and reads them in any
   order, so a hand edit or a resolved merge conflict that reorders lines
   stays valid, and the next write restores the order. Use `null` for unset
   scalar fields and `[]` for no dependencies.
@@ -440,7 +439,7 @@ contract and acceptance checks for v1.
   every file has the key, and a file without it is invalid like one without
   any other fixed key. Reserve
   top-level `## Closing Summary`, `## History`, and `## Notes` for the managed
-  sections. `.jig/config.json` holds the per-project settings; today only
+  sections. `.billet/config.json` holds the per-project settings; today only
   `prefix`, and an unknown key makes it invalid.
 - **Dates and readiness.** New timestamps use UTC. `defer_until` is a UTC
   calendar date; the issue is eligible on that day. Sort `ready` by priority
@@ -461,10 +460,10 @@ contract and acceptance checks for v1.
   with a nonzero exit code and no partial JSON.
 - **Read-only access.** Read commands (`start`, `ready`, `show`, `list`,
   `tree`, `recall`, `check`) work in a checkout without write access to
-  `.jig/`; they do not need to create or write `.jig/.lock`. Where they can
-  write, the non-`check` read commands may finish an interrupted move as
+  `.billet/`; they do not need to create or write `.billet/.lock`. Where they
+  can write, the non-`check` read commands may finish an interrupted move as
   before; where they cannot, a pending move is reported as an error.
-- **Grouped lists.** Only `jig list` without arguments (apart from
+- **Grouped lists.** Only `blt list` without arguments (apart from
   `--json`) is an overview: its text output groups the active issues by
   status in the order `review`, `proposed`, `claimed`, `open`, so the work
   waiting for a person comes first. Each group starts with a `STATUS (N)`
@@ -476,7 +475,7 @@ contract and acceptance checks for v1.
   the usual order. `--status` takes one of `proposed`, `open`, `claimed`,
   `review`, `closed`, or `all`; there is no `active` value, since the
   default already shows the active issues.
-- **Help text.** `jig --help` groups commands by purpose (browsing,
+- **Help text.** `blt --help` groups commands by purpose (browsing,
   creating and editing, agent work, human decisions, memory, setup),
   indents commands by two spaces, and aligns descriptions in one column.
   A command whose syntax does not fit puts its description on the next
@@ -501,7 +500,7 @@ contract and acceptance checks for v1.
   approve any external argument, serialization, or hashing libraries before
   adding them. The only approved dependency is pinned `serde_json`
   (`=1.0.154`, `arbitrary_precision`), used for editing agent
-  configuration during `init` and for JSON-RPC messages in `jig mcp`; its
+  configuration during `init` and for JSON-RPC messages in `blt mcp`; its
   license texts live in `licenses/`.
 
 ## Acceptance Checks
@@ -562,28 +561,28 @@ contract and acceptance checks for v1.
 - `show` gives `Ready: yes` for a ready issue and, for one issue that is
   deferred, blocked, and waiting for a subtask at once, `Ready: no` with all
   three reasons in the agreed order; JSON `readiness` carries the same.
-- `show` of an issue without documents prints `Documents: .jig/docs/KEY/
+- `show` of an issue without documents prints `Documents: .billet/docs/KEY/
   (none)` and JSON `docs: []` with `docs_dir`. Put files, including one in
-  a subdirectory, in `.jig/docs/KEY/`: `show` lists their paths in text and
+  a subdirectory, in `.billet/docs/KEY/`: `show` lists their paths in text and
   in JSON `docs`; `close` and `reopen` leave
-  them in place. A directory in `.jig/docs/` named after no issue and a
-  plain file directly in `.jig/docs/` are reported by `check`; a registry
-  without `docs/` is clean. With `.jig/docs/KEY` replaced by a file, `show`
+  them in place. A directory in `.billet/docs/` named after no issue and a
+  plain file directly in `.billet/docs/` are reported by `check`; a registry
+  without `docs/` is clean. With `.billet/docs/KEY` replaced by a file, `show`
   prints the issue, warns with the relative path, and exits 0.
 - With issues in every status, `list` prints the non-empty groups in the
   order `review`, `proposed`, `claimed`, `open` with counts and rows in the
   flat-list format; `list --status all`, `--status open`, `--release`, and
   `--sort` print flat lists; `--status active` is rejected; JSON output is
   the same flat array as before.
-- `jig --help` names every command, has no line longer than 80 columns,
+- `blt --help` names every command, has no line longer than 80 columns,
   and indents every command line.
 - Seed one instance of every `check` problem: a single `check` run reports
   all of them with hints and changes no byte in the registry.
 - Remove write access from a freshly cloned registry without `.lock`: all
   read commands succeed.
-- `jig mcp` started in a subdirectory of a project completes `initialize`
-  with `instructions` equal to the `jig start` text plus the MCP paragraph;
-  the `AGENTS.md` block and `jig start` contain no mention of MCP. `tools/list` names exactly
+- `blt mcp` started in a subdirectory of a project completes `initialize`
+  with `instructions` equal to the `blt start` text plus the MCP paragraph;
+  the `AGENTS.md` block and `blt start` contain no mention of MCP. `tools/list` names exactly
   the commands of the dispatcher (minus `mcp`, plus `dep_add`/`dep_rm`),
   read tools carry `readOnlyHint`, and the decision tools' descriptions
   start with "A person's decision:". For every tool, a scripted call gives

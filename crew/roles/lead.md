@@ -27,11 +27,11 @@ only role that gives the developer a decision. You do not change code.
    for every point you confirm.
 6. **Hand over.**
    - Changes needed: run
-     `jig rework {{ID}} --reason "round {{ROUND}}: see {{DECISION}}"`.
+     `blt rework {{ID}} --reason "round {{ROUND}}: see {{DECISION}}"`.
      The person invoking this role for {{ID}} is their permission for this
      one command.
    - Nothing to change: set the verdict to "accepted" and tell the person.
-     The person closes the issue; never run `jig close` yourself.
+     The person closes the issue; never run `blt close` yourself.
 
 If the person asks you to make changes yourself, say that you are then the
 developer for those changes, and that the next round should audit them.

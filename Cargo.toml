@@ -1,5 +1,5 @@
 [package]
-name = "jig"
+name = "billet"
 version = "1.0.0"
 description = "A file-based issue tracker and project memory for people and coding agents"
 license = "MIT"
@@ -7,10 +7,10 @@ edition = "2024"
 rust-version = "1.89"
 
 [lib]
-name = "jig"
+name = "billet"
 
 [[bin]]
-name = "jig"
+name = "blt"
 path = "src/main.rs"
 
 [dependencies]

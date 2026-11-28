@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jig start --hook-json",
+            "command": "blt start --hook-json",
             "timeout": 5
           }
         ]

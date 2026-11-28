@@ -5,7 +5,7 @@ label and printed the mode.
 
 ## What to work from
 
-- **The contract** is the issue description (`jig show {{ID}}`) together
+- **The contract** is the issue description (`blt show {{ID}}`) together
   with the architecture documents listed under `Read:`, if any. If it is
   contradictory or incomplete, ask the person before you write code. Do
   not fill gaps with guesses.
@@ -17,9 +17,9 @@ label and printed the mode.
 - **Large work.** If the `Architect:` line says "not reviewed" and the work
   looks too large or unclear for one review round, tell the person and ask
   whether to hand it to the architect first (the person returns it with
-  `jig revise`). Continue if the person says so.
+  `blt revise`). Continue if the person says so.
 - **Subtasks.** If the work has clearly separable parts, you may propose
-  them as subtasks (`jig add TITLE --parent {{ID}} --body TEXT`, each with
+  them as subtasks (`blt add TITLE --parent {{ID}} --body TEXT`, each with
   its own contract). They start as proposals for the person to approve.
   This is a suggestion, not a requirement.
 
@@ -27,7 +27,7 @@ label and printed the mode.
 
 - Change what the contract or the decision requires, and nothing else.
   When you find an unrelated problem, record it with
-  `jig add TITLE --body TEXT` (it starts as a proposal) and list it in the
+  `blt add TITLE --body TEXT` (it starts as a proposal) and list it in the
   handoff. Do not fix it here.
 - Run the checks the repository requires for what you changed.
 - Do not commit, push, or tag unless the person tells you to.
@@ -43,7 +43,7 @@ label and printed the mode.
 3. After your last edit and your last check, run `{{CREW}} fingerprint`
    and replace the text after `Fingerprint:` in the handoff with its
    output. Keep `Fingerprint:` at the start of that line; crew reads it.
-4. Submit: `jig review {{ID}} --summary "round {{ROUND}}: <one line>"`.
+4. Submit: `blt review {{ID}} --summary "round {{ROUND}}: <one line>"`.
 5. Stop and tell the person the issue is ready for audit. From now on the
    issue is in review and the code is frozen: do not edit any file until the
    lead returns it with rework.

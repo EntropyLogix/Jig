@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const COMMAND: &str = "jig start --hook-json";
+const COMMAND: &str = "blt start --hook-json";
 const CONFIGS: [(&str, &str); 2] = [(".claude", "settings.json"), (".codex", "hooks.json")];
 
 struct Change {
@@ -22,7 +22,7 @@ pub(crate) fn install(root: &Path, with_hooks: bool) -> Result<Option<String>, S
         }
         instructions::Update::Unchanged => None,
         instructions::Update::Customized => {
-            Some("AGENTS.md: Jig instructions are customized; left unchanged".to_string())
+            Some("AGENTS.md: Billet instructions are customized; left unchanged".to_string())
         }
         instructions::Update::NeedsAttention { problem, hint } => {
             Some(format!("AGENTS.md: {problem}\n  hint: {hint}"))
@@ -272,7 +272,7 @@ fn splice(
 }
 
 const COMPACT_GROUP: &str =
-    "{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}";
+    "{\"hooks\":[{\"type\":\"command\",\"command\":\"blt start --hook-json\",\"timeout\":5}]}";
 
 fn hook_group(nl: &str, unit: &str, indent: &str, compact: bool) -> String {
     if compact {
@@ -394,7 +394,7 @@ fn hook_update(text: &str) -> Result<Option<String>, String> {
                             if item.get("command").and_then(Value::as_str) == Some(COMMAND) {
                                 if group != &desired || found {
                                     return Err(
-                                        "existing Jig SessionStart handler differs or is duplicated; keep just one standard handler"
+                                        "existing Billet SessionStart handler differs or is duplicated; keep just one standard handler"
                                             .into(),
                                     );
                                 }
@@ -485,7 +485,7 @@ mod tests {
         let v: Value = serde_json::from_str(result).unwrap();
         let groups = v["hooks"]["SessionStart"].as_array().unwrap();
         let standard =
-            json!({"hooks":[{"command":"jig start --hook-json","timeout":5,"type":"command"}]});
+            json!({"hooks":[{"command":"blt start --hook-json","timeout":5,"type":"command"}]});
         assert_eq!(
             groups.last().unwrap(),
             &standard,
@@ -520,7 +520,7 @@ mod tests {
                 "SessionStart to be an array",
             ),
             (
-                "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":9}]}]}}",
+                "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"command\",\"command\":\"blt start --hook-json\",\"timeout\":9}]}]}}",
                 "differs or is duplicated",
             ),
             ("{bad json", "invalid JSON"),
@@ -528,14 +528,14 @@ mod tests {
         let two = concat!(
             "{\n  \"model\": \"opus\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n",
             "        \"hooks\": [\n          {\n            \"type\": \"command\",\n",
-            "            \"command\": \"jig start --hook-json\",\n            \"timeout\": 5\n",
+            "            \"command\": \"blt start --hook-json\",\n            \"timeout\": 5\n",
             "          }\n        ]\n      }\n    ]\n  }\n}\n"
         );
         let four = concat!(
             "{\n    \"hooks\": {\n        \"PostToolUse\": [{\"hooks\": []}],\n",
             "        \"SessionStart\": [\n            {\n                \"hooks\": [\n",
             "                    {\n                        \"type\": \"command\",\n",
-            "                        \"command\": \"jig start --hook-json\",\n",
+            "                        \"command\": \"blt start --hook-json\",\n",
             "                        \"timeout\": 5\n                    }\n                ]\n",
             "            }\n        ]\n    }\n}"
         );
@@ -543,21 +543,21 @@ mod tests {
             "{\n\t\"hooks\": {\n\t\t\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"old\"}]},\n",
             "\t\t\t{\n\t\t\t\t\"hooks\": [\n\t\t\t\t\t{\n",
             "\t\t\t\t\t\t\"type\": \"command\",\n",
-            "\t\t\t\t\t\t\"command\": \"jig start --hook-json\",\n",
+            "\t\t\t\t\t\t\"command\": \"blt start --hook-json\",\n",
             "\t\t\t\t\t\t\"timeout\": 5\n\t\t\t\t\t}\n\t\t\t\t]\n",
             "\t\t\t}\n\t\t]\n\t}\n}"
         );
         let crlf = concat!(
             "{\r\n  \"hooks\": {\r\n    \"SessionStart\": [\r\n      {\r\n",
             "        \"hooks\": [\r\n          {\r\n            \"type\": \"command\",\r\n",
-            "            \"command\": \"jig start --hook-json\",\r\n            \"timeout\": 5\r\n",
+            "            \"command\": \"blt start --hook-json\",\r\n            \"timeout\": 5\r\n",
             "          }\r\n        ]\r\n      }\r\n    ]\r\n  }\r\n}\r\n"
         );
         let mixed = concat!(
             "{\n    \"model\": 1, \"hooks\": {\n        \"SessionStart\": [\n            {\n",
             "                \"hooks\": [\n                    {\n",
             "                        \"type\": \"command\",\n",
-            "                        \"command\": \"jig start --hook-json\",\n",
+            "                        \"command\": \"blt start --hook-json\",\n",
             "                        \"timeout\": 5\n                    }\n                ]\n",
             "            }\n        ]\n    }\n}"
         );
@@ -586,17 +586,17 @@ mod tests {
             (
                 "compact_empty",
                 "{}",
-                "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}",
+                "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"blt start --hook-json\",\"timeout\":5}]}]}}",
             ),
             (
                 "compact_final_lf",
                 "{}\n",
-                "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}\n",
+                "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"blt start --hook-json\",\"timeout\":5}]}]}}\n",
             ),
             (
                 "compact_member",
                 "{\"model\": \"opus\"}",
-                "{\"model\": \"opus\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"jig start --hook-json\",\"timeout\":5}]}]}}",
+                "{\"model\": \"opus\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"blt start --hook-json\",\"timeout\":5}]}]}}",
             ),
         ];
 

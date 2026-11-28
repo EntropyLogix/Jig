@@ -18,7 +18,7 @@ Usage:
   crew fingerprint                      print the code fingerprint for a handoff
 
 LABEL names the agent (letters, digits, '.', '_', '-'), e.g. claude-dev.
-Run crew inside the project that holds the Jig registry.
+Run crew inside the project that holds the Billet registry.
 EOF
 }
 
@@ -32,7 +32,7 @@ refuse() {
 }
 
 need() {
-    for tool in jig jq git; do
+    for tool in blt jq git; do
         command -v "$tool" >/dev/null 2>&1 || refuse "$tool is required but not installed"
     done
 }
@@ -52,7 +52,7 @@ round_name() {
 find_root() {
     dir=$PWD
     while :; do
-        if [ -d "$dir/.jig" ]; then
+        if [ -d "$dir/.billet" ]; then
             printf '%s\n' "$dir"
             return 0
         fi
@@ -62,7 +62,7 @@ find_root() {
 }
 
 load() {
-    info=$(jig show "$1" --json) || exit 2
+    info=$(blt show "$1" --json) || exit 2
     ID=$(printf '%s' "$info" | jq -r '.id')
     STATUS=$(printf '%s' "$info" | jq -r '.status')
     ASSIGNEE=$(printf '%s' "$info" | jq -r '.assignee // ""')
@@ -76,7 +76,7 @@ load() {
         grep -E '^- [^ ]* [^ ]* UTC (submitted for review|rework requested|reopened)' |
         tail -n 1 |
         sed -E 's/^- [^ ]* [^ ]* UTC //')
-    ROOT=$(find_root) || refuse "no .jig registry found above $PWD"
+    ROOT=$(find_root) || refuse "no .billet registry found above $PWD"
 }
 
 escape() {
@@ -113,7 +113,7 @@ fingerprint() {
     head=$(git rev-parse --verify -q HEAD) || head=none
     base=$head
     [ "$head" = none ] && base=$(git hash-object -t tree /dev/null)
-    exclude=':(glob,exclude)**/.jig/**'
+    exclude=':(glob,exclude)**/.billet/**'
     diff=$(git diff --binary "$base" -- . "$exclude" | git hash-object --stdin)
     untracked=$(git ls-files -z --others --exclude-standard -- . "$exclude" |
         tr '\0' '\n' |
@@ -155,7 +155,7 @@ lineage() {
     [ -n "$note" ] && ARCHITECT="$ID $note"
     ancestor=$PARENT
     while [ -n "$ancestor" ]; do
-        ancestor_info=$(jig show "$ancestor" --json 2>/dev/null) || break
+        ancestor_info=$(blt show "$ancestor" --json 2>/dev/null) || break
         ancestor_docs=$(printf '%s' "$ancestor_info" | jq -r '.docs_dir')
         ancestor_docs=${ancestor_docs%/}
         if [ -f "$ROOT/$ancestor_docs/architecture.md" ]; then
@@ -211,7 +211,7 @@ role_dev() {
     load "$1"
     case $STATUS in
         open)
-            claimed=$(jig claim "$ID" --by "$LABEL") || exit 2
+            claimed=$(blt claim "$ID" --by "$LABEL") || exit 2
             load "$ID"
             ;;
         claimed) ;;
@@ -220,7 +220,7 @@ role_dev() {
                 "Wait for the decision of $(round_name "$ROUNDS")."
             ;;
         proposed)
-            refuse "$ID is proposed: a person approves it first (jig approve $ID)."
+            refuse "$ID is proposed: a person approves it first (blt approve $ID)."
             ;;
         *)
             refuse "$ID is $STATUS: there is no work to do."
@@ -228,7 +228,7 @@ role_dev() {
     esac
     if [ -z "$ASSIGNEE" ]; then
         refuse "$ID is claimed without a label." \
-            "A person decides whether to take it over: jig unclaim $ID, then run crew again."
+            "A person decides whether to take it over: blt unclaim $ID, then run crew again."
     fi
     if [ "$ASSIGNEE" != "$LABEL" ]; then
         refuse "$ID is claimed by $ASSIGNEE, not by $LABEL."
@@ -239,7 +239,7 @@ role_dev() {
         'rework requested'*)
             MODE=fixes
             DECISION="$DOCS/review/$(round_name "$ROUNDS")/decision.md"
-            [ -f "$ROOT/$DECISION" ] || DECISION="none (read the rework reason in jig show $ID)"
+            [ -f "$ROOT/$DECISION" ] || DECISION="none (read the rework reason in blt show $ID)"
             ;;
         *)
             MODE=new
@@ -257,10 +257,10 @@ role_dev() {
     if [ "$MODE" = fixes ]; then
         printf 'Mode:  fixes after %s\n' "$(round_name "$ROUNDS")"
         printf 'Read:  %s\n' "$DECISION"
-        printf '       jig show %s (the contract)\n' "$ID"
+        printf '       blt show %s (the contract)\n' "$ID"
     else
         printf 'Mode:  new work\n'
-        printf 'Read:  jig show %s (the contract)\n' "$ID"
+        printf 'Read:  blt show %s (the contract)\n' "$ID"
     fi
     print_architectures
     printf 'Write: %s (%s)\n' "$HANDOFF" "$state"
@@ -301,7 +301,7 @@ role_audit() {
         header "auditor ($LABEL)"
     fi
     printf 'Code:  %s\n' "$(code_state)"
-    printf 'Read:  jig show %s (the contract)\n' "$ID"
+    printf 'Read:  blt show %s (the contract)\n' "$ID"
     print_architectures
     printf '       %s\n' "$HANDOFF"
     [ "$PREVIOUS" != none ] && printf '       %s (previous decision)\n' "$PREVIOUS"
@@ -341,7 +341,7 @@ role_lead() {
     lineage
     header "review lead"
     printf 'Code:  %s\n' "$(code_state)"
-    printf 'Read:  jig show %s (the contract)\n' "$ID"
+    printf 'Read:  blt show %s (the contract)\n' "$ID"
     print_architectures
     printf '       %s\n' "$HANDOFF"
     [ "$PREVIOUS" != none ] && printf '       %s (previous decision)\n' "$PREVIOUS"
@@ -366,7 +366,7 @@ role_architect() {
         proposed) ;;
         open)
             refuse "$ID is open: it is already approved for implementation." \
-                "A person returns it for analysis with: jig revise $ID --reason TEXT"
+                "A person returns it for analysis with: blt revise $ID --reason TEXT"
             ;;
         *)
             refuse "$ID is $STATUS: the architect works on proposals, before implementation starts."
@@ -379,14 +379,14 @@ role_architect() {
     if [ -n "$ARCHITECT" ]; then
         printf 'Architect: earlier note (%s)\n' "$ARCHITECT"
     fi
-    printf 'Read:  jig show %s (the proposal)\n' "$ID"
-    printf '       jig tree %s (existing subtasks)\n' "$ID"
+    printf 'Read:  blt show %s (the proposal)\n' "$ID"
+    printf '       blt tree %s (existing subtasks)\n' "$ID"
     printf '%s\n' "$ARCHITECTURES" | grep -v '^$' | grep -v -F -x "$ARCHITECTURE_DOC (architecture)" | while IFS= read -r line; do
         printf '       %s\n' "$line"
     done
     printf 'Write: %s (%s)\n' "$ARCHITECTURE_DOC" "$state"
-    printf '       the description of %s (jig update %s --body -)\n' "$ID" "$ID"
-    printf '       subtasks (jig add TITLE --parent %s --body TEXT) and blockers (jig dep add)\n' "$ID"
+    printf '       the description of %s (blt update %s --body -)\n' "$ID" "$ID"
+    printf '       subtasks (blt add TITLE --parent %s --body TEXT) and blockers (blt dep add)\n' "$ID"
     instructions common.md architect.md
 }
 

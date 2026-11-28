@@ -89,7 +89,7 @@ fn initialize_response(id: Value) -> Value {
         id,
         json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "serverInfo": {"name":"jig","version":env!("CARGO_PKG_VERSION")},
+            "serverInfo": {"name":"billet","version":env!("CARGO_PKG_VERSION")},
             "capabilities": {"tools": {}},
             "instructions": instructions
         }),
@@ -322,7 +322,7 @@ fn tool_result(output: CommandOutput) -> Value {
             text.push('\n');
         }
         for warning in output.warnings {
-            text.push_str("jig: warning: ");
+            text.push_str("blt: warning: ");
             text.push_str(&warning);
             text.push('\n');
         }

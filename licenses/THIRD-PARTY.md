@@ -1,7 +1,7 @@
 # Third-party runtime dependencies
 
-`jig` (binary and library) depends on serde_json for editing agent
-configuration during `jig init`. The resolved runtime graph (`cargo tree
+`billet` (the `blt` binary and the library) depends on serde_json for editing
+agent configuration during `blt init`. The resolved runtime graph (`cargo tree
 --locked --edges normal`) and each crate's license:
 
 | Crate | Version | License | Text |

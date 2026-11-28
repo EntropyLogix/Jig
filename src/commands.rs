@@ -673,21 +673,21 @@ fn pos_n(p: &Parsed, n: usize, what: &str) -> R<()> {
 }
 
 fn registry(cwd: &Path) -> R<store::Lock> {
-    let jig = store::discover(cwd).map_err(fail)?;
-    store::lock(&jig).map_err(fail)
+    let billet = store::discover(cwd).map_err(fail)?;
+    store::lock(&billet).map_err(fail)
 }
 
 fn with_registry<T>(cwd: &Path, mut read: impl FnMut(&Path) -> R<T>) -> R<T> {
-    let jig = store::discover(cwd).map_err(fail)?;
-    store::with_read(&jig, store::Recovery::Allow, || read(&jig)).map_err(fail)?
+    let billet = store::discover(cwd).map_err(fail)?;
+    store::with_read(&billet, store::Recovery::Allow, || read(&billet)).map_err(fail)?
 }
 
-fn names(jig: &Path) -> R<Names> {
-    snapshot_names(jig, &check::scan(jig))
+fn names(billet: &Path) -> R<Names> {
+    snapshot_names(billet, &check::scan(billet))
 }
 
-fn snapshot_names(jig: &Path, snap: &check::Snapshot) -> R<Names> {
-    let config = config::load(jig).map_err(fail)?;
+fn snapshot_names(billet: &Path, snap: &check::Snapshot) -> R<Names> {
+    let config = config::load(billet).map_err(fail)?;
     Ok(snap.names(&config.prefix))
 }
 
@@ -708,7 +708,7 @@ fn duplicate_warnings(names: &Names) -> Vec<String> {
                 .collect::<Vec<_>>()
                 .join(" and ");
             format!(
-                "number {}{number} is used by {paths}; run `jig check`",
+                "number {}{number} is used by {paths}; run `blt check`",
                 names.prefix
             )
         })
@@ -728,15 +728,15 @@ fn resolve(names: &Names, raw: &str) -> R<String> {
                 .collect::<Vec<_>>()
                 .join(", ");
             Err(fail(format!(
-                "{shown} is ambiguous: {matches}; run `jig check`"
+                "{shown} is ambiguous: {matches}; run `blt check`"
             )))
         }
     }
 }
 
-fn load(jig: &Path, names: &Names, raw: &str) -> R<Loaded> {
+fn load(billet: &Path, names: &Names, raw: &str) -> R<Loaded> {
     let key = resolve(names, raw)?;
-    store::find(jig, &key)
+    store::find(billet, &key)
         .map_err(fail)?
         .ok_or_else(|| fail(format!("issue {} not found", names.name(&key))))
 }
@@ -1085,7 +1085,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "init",
         group: HelpGroup::Setup,
         syntax: "init [--no-hooks] [--prefix P]",
-        description: "create .jig/, AGENTS.md and project hooks",
+        description: "create .billet/, AGENTS.md and project hooks",
         args: ARGS_INIT,
         handler: handle_init,
         decision: true,
@@ -1168,7 +1168,7 @@ pub fn command_names() -> impl Iterator<Item = &'static str> {
 
 fn help_text() -> String {
     let mut out = String::from(
-        "Jig - file-based issue tracker and project memory\n\nUsage: jig [--json] COMMAND [ARGS]\n\n",
+        "Billet - file-based issue tracker and project memory\n\nUsage: blt [--json] COMMAND [ARGS]\n\n",
     );
     for (index, group) in HelpGroup::ALL.iter().enumerate() {
         out.push_str(group.title());
@@ -1207,7 +1207,7 @@ fn run_inner(args: &[String], cwd: &Path, allow_stdin: bool) -> Result<CommandOu
     let mut i = 0usize;
     let cmd = loop {
         let Some(a) = args.get(i) else {
-            return Err(usage("missing command; try `jig --help`"));
+            return Err(usage("missing command; try `blt --help`"));
         };
         match a.as_str() {
             "--json" if json => return Err(usage("duplicate option --json")),
@@ -1218,7 +1218,7 @@ fn run_inner(args: &[String], cwd: &Path, allow_stdin: bool) -> Result<CommandOu
             "--" => {
                 i += 1;
                 let Some(a) = args.get(i) else {
-                    return Err(usage("missing command; try `jig --help`"));
+                    return Err(usage("missing command; try `blt --help`"));
                 };
                 break a.to_string();
             }
@@ -1227,7 +1227,7 @@ fn run_inner(args: &[String], cwd: &Path, allow_stdin: bool) -> Result<CommandOu
             }
             "--version" => {
                 return Ok(CommandOutput::plain(format!(
-                    "jig {}\n",
+                    "blt {}\n",
                     env!("CARGO_PKG_VERSION")
                 )));
             }
@@ -1242,7 +1242,7 @@ fn run_inner(args: &[String], cwd: &Path, allow_stdin: bool) -> Result<CommandOu
         return Err(usage(format!("--json is not valid for `{cmd}`")));
     }
     let Some(spec) = COMMANDS.iter().find(|spec| spec.name == cmd) else {
-        return Err(usage(format!("unknown command {cmd}; try `jig --help`")));
+        return Err(usage(format!("unknown command {cmd}; try `blt --help`")));
     };
     (spec.handler)(&tail, cwd, json, allow_stdin)
 }
@@ -1353,9 +1353,9 @@ fn cmd_init(args: &[String], cwd: &Path) -> R<String> {
     let _lock = registry(cwd)?;
     let notice = integration::install(cwd, !flag(&p, "no_hooks")).map_err(fail)?;
     let mut out = if created {
-        "initialized .jig/\n".to_string()
+        "initialized .billet/\n".to_string()
     } else {
-        ".jig/ already initialized\n".to_string()
+        ".billet/ already initialized\n".to_string()
     };
     if let Some(notice) = notice {
         out.push_str(&notice);
@@ -1378,7 +1378,7 @@ fn cmd_start(args: &[String], cwd: &Path, json: bool) -> R<String> {
             issue::esc(instructions::WORKFLOW.trim_end_matches('\n'))
         ));
     }
-    with_registry(cwd, |_jig| {
+    with_registry(cwd, |_billet| {
         let workflow = instructions::WORKFLOW.trim_end_matches('\n');
         if json {
             Ok(format!("{{\"workflow\":{}}}\n", issue::esc(workflow)))
@@ -1398,25 +1398,25 @@ fn cmd_add(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
         .unwrap_or(2);
     let body = body_arg(&p, allow_stdin)?.unwrap_or_default();
     let lock = registry(cwd)?;
-    let jig = lock.jig.clone();
-    let names = names(&jig)?;
+    let billet = lock.billet.clone();
+    let names = names(&billet)?;
     let parent = match opt(&p, "parent") {
-        Some(raw) => Some(load(&jig, &names, raw)?.issue.id),
+        Some(raw) => Some(load(&billet, &names, raw)?.issue.id),
         None => None,
     };
     let mut depends_on = Vec::new();
     for raw in p.opts.get("dep").into_iter().flatten() {
-        let id = load(&jig, &names, raw)?.issue.id;
+        let id = load(&billet, &names, raw)?.issue.id;
         if depends_on.contains(&id) {
             return Err(usage(format!("duplicate dependency {}", names.name(&id))));
         }
         depends_on.push(id);
     }
     let (id, number) = match &parent {
-        Some(p) => (next_child(&jig, p)?, None),
+        Some(p) => (next_child(&billet, p)?, None),
         None => {
             let salt = ident::install_salt(&state_dir()?).map_err(fail)?;
-            let key = ident::new_issue_id(&salt, |id| store::exists(&jig, id)).map_err(fail)?;
+            let key = ident::new_issue_id(&salt, |id| store::exists(&billet, id)).map_err(fail)?;
             (key, Some(names.next_number()))
         }
     };
@@ -1445,17 +1445,17 @@ fn cmd_add(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
         notes: String::new(),
         closing_summary: None,
     };
-    store::write_new(&jig, &new).map_err(fail)?;
+    store::write_new(&billet, &new).map_err(fail)?;
     let mut names = names;
     names.add(&new, PathBuf::new());
     Ok(format!("{}\n", names.name(&id)))
 }
 
-fn next_child(jig: &Path, parent: &str) -> R<String> {
+fn next_child(billet: &Path, parent: &str) -> R<String> {
     let prefix = format!("{parent}.");
     let mut max: u64 = 0;
     for place in [Place::Open, Place::Closed] {
-        let dir = jig.join(place.dir());
+        let dir = billet.join(place.dir());
         let rd = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -1507,7 +1507,7 @@ fn file_warnings(
             continue;
         }
         warnings.push(format!(
-            "skipping {}: {}; run `jig check`",
+            "skipping {}: {}; run `blt check`",
             problem.path.display(),
             problem.problem
         ));
@@ -1520,7 +1520,7 @@ fn file_warnings(
         if let Some((problem, _)) = domain::field_problems(&rec.issue).first() {
             warned.insert(rec.path.clone());
             warnings.push(format!(
-                "{prefix}{}: {problem}; run `jig check`",
+                "{prefix}{}: {problem}; run `blt check`",
                 rec.path.display()
             ));
         }
@@ -1532,11 +1532,11 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_command_tail(args, "ready")?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
-    with_registry(cwd, |jig| {
-        let snap = check::scan(jig);
-        let names = snapshot_names(jig, &snap)?;
+    with_registry(cwd, |billet| {
+        let snap = check::scan(billet);
+        let names = snapshot_names(billet, &snap)?;
         let today = clock::today();
-        let mut warnings = file_warnings(&snap, |p| p.starts_with(".jig/open"), true);
+        let mut warnings = file_warnings(&snap, |p| p.starts_with(".billet/open"), true);
         warnings.extend(duplicate_warnings(&names));
         let mut rows = Vec::new();
         for i in snap.issues() {
@@ -1559,7 +1559,7 @@ fn cmd_ready(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                     .map(|reference| reference.text(&names))
                     .collect();
                 warnings.push(format!(
-                    "skipping {}: unresolved {}; run `jig check`",
+                    "skipping {}: unresolved {}; run `blt check`",
                     names.name(&i.id),
                     unresolved.join(", ")
                 ));
@@ -1593,9 +1593,11 @@ fn cmd_check(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_command_tail(args, "check")?;
     pos_n(&p, 0, "no arguments")?;
     let json = json || flag(&p, "json");
-    let jig = store::discover_raw(cwd).map_err(fail)?;
-    let problems = store::with_read(&jig, store::Recovery::ReportOnly, || check::collect(&jig))
-        .map_err(fail)?;
+    let billet = store::discover_raw(cwd).map_err(fail)?;
+    let problems = store::with_read(&billet, store::Recovery::ReportOnly, || {
+        check::collect(&billet)
+    })
+    .map_err(fail)?;
     if problems.is_empty() {
         return Ok(CommandOutput::plain(if json {
             "[]\n".to_string()
@@ -1635,15 +1637,15 @@ fn cmd_check(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     })
 }
 
-fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> {
-    let docs_root = jig.join("docs");
+fn issue_docs(billet: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> {
+    let docs_root = billet.join("docs");
     match std::fs::symlink_metadata(&docs_root) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Ok((
                 Vec::new(),
                 vec![
-                    ".jig/docs: must be a real directory (not a symbolic link); run `jig check`"
+                    ".billet/docs: must be a real directory (not a symbolic link); run `blt check`"
                         .to_string(),
                 ],
             ));
@@ -1651,7 +1653,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
         Ok(_) => {
             return Ok((
                 Vec::new(),
-                vec![".jig/docs: must be a real directory; run `jig check`".to_string()],
+                vec![".billet/docs: must be a real directory; run `blt check`".to_string()],
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1661,12 +1663,12 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
             return Ok((
                 Vec::new(),
                 vec![format!(
-                    ".jig/docs: cannot inspect: {error}; run `jig check`"
+                    ".billet/docs: cannot inspect: {error}; run `blt check`"
                 )],
             ));
         }
     }
-    let docs = jig.join("docs").join(id);
+    let docs = billet.join("docs").join(id);
     let metadata = match std::fs::symlink_metadata(&docs) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1675,7 +1677,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
         Err(error) => {
             return Ok((
                 Vec::new(),
-                vec![format!(".jig/docs/{id}: cannot inspect: {error}")],
+                vec![format!(".billet/docs/{id}: cannot inspect: {error}")],
             ));
         }
     };
@@ -1683,7 +1685,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
         return Ok((
             Vec::new(),
             vec![format!(
-                ".jig/docs/{id}: must be a real directory (not a symbolic link); run `jig check`"
+                ".billet/docs/{id}: must be a real directory (not a symbolic link); run `blt check`"
             )],
         ));
     }
@@ -1691,7 +1693,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
         return Ok((
             Vec::new(),
             vec![format!(
-                ".jig/docs/{id}: must be a real directory; run `jig check`"
+                ".billet/docs/{id}: must be a real directory; run `blt check`"
             )],
         ));
     }
@@ -1704,7 +1706,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
                     .strip_prefix(root)
                     .map(|path| path.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_else(|_| dir.to_string_lossy().replace('\\', "/"));
-                warnings.push(format!("{rel}: cannot read: {error}; run `jig check`"));
+                warnings.push(format!("{rel}: cannot read: {error}; run `blt check`"));
                 return;
             }
         };
@@ -1717,7 +1719,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
                         .map(|path| path.to_string_lossy().replace('\\', "/"))
                         .unwrap_or_else(|_| dir.to_string_lossy().replace('\\', "/"));
                     warnings.push(format!(
-                        "{rel}: cannot read entry: {error}; run `jig check`"
+                        "{rel}: cannot read entry: {error}; run `blt check`"
                     ));
                     continue;
                 }
@@ -1730,7 +1732,7 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
                         .strip_prefix(root)
                         .map(|path| path.to_string_lossy().replace('\\', "/"))
                         .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
-                    warnings.push(format!("{rel}: cannot inspect: {error}; run `jig check`"));
+                    warnings.push(format!("{rel}: cannot inspect: {error}; run `blt check`"));
                     continue;
                 }
             };
@@ -1745,13 +1747,13 @@ fn issue_docs(jig: &Path, id: &str) -> Result<(Vec<String>, Vec<String>), Fail> 
                     .map(|path| path.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
                 warnings.push(format!(
-                    "{rel}: must be a regular file or directory; run `jig check`"
+                    "{rel}: must be a regular file or directory; run `blt check`"
                 ));
             }
         }
     }
 
-    let project_root = jig
+    let project_root = billet
         .parent()
         .ok_or_else(|| fail("cannot determine project root"))?;
     let mut paths = Vec::new();
@@ -1800,10 +1802,10 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_command_tail(args, "show")?;
     pos_n(&p, 1, "show ID")?;
     let json = json || flag(&p, "json");
-    with_registry(cwd, |jig| {
-        let snap = check::scan(jig);
-        let names = snapshot_names(jig, &snap)?;
-        let l = load(jig, &names, &p.pos[0])?;
+    with_registry(cwd, |billet| {
+        let snap = check::scan(billet);
+        let names = snapshot_names(billet, &snap)?;
+        let l = load(billet, &names, &p.pos[0])?;
         snap.resolve(&l.issue.id)
             .map_err(|e| fail(e.text(&names)))?;
         let i = &l.issue;
@@ -1816,8 +1818,8 @@ fn cmd_show(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
                     .join(",")
             )
         };
-        let (docs, doc_warnings) = issue_docs(jig, &i.id)?;
-        let docs_dir = format!(".jig/docs/{}/", i.id);
+        let (docs, doc_warnings) = issue_docs(billet, &i.id)?;
+        let docs_dir = format!(".billet/docs/{}/", i.id);
         let mut readiness = domain::eligibility(
             i,
             &clock::today(),
@@ -1950,9 +1952,9 @@ fn cmd_list(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
             )));
         }
     };
-    with_registry(cwd, |jig| {
-        let snap = check::scan(jig);
-        let names = snapshot_names(jig, &snap)?;
+    with_registry(cwd, |billet| {
+        let snap = check::scan(billet);
+        let names = snapshot_names(billet, &snap)?;
         let want = |s: Status| {
             filter == "all"
                 || (filter == "active" && s.active())
@@ -2043,9 +2045,9 @@ fn cmd_tree(args: &[String], cwd: &Path, json: bool) -> R<CommandOutput> {
     let p = parse_command_tail(args, "tree")?;
     pos_n(&p, 1, "tree ID")?;
     let json = json || flag(&p, "json");
-    with_registry(cwd, |jig| {
-        let snap = check::scan(jig);
-        let names = snapshot_names(jig, &snap)?;
+    with_registry(cwd, |billet| {
+        let snap = check::scan(billet);
+        let names = snapshot_names(billet, &snap)?;
         let id = resolve(&names, &p.pos[0])?;
         let root = snap.resolve(&id).map_err(|e| fail(e.text(&names)))?;
         let available: HashSet<&str> = snap.issues().map(|i| i.id.as_str()).collect();
@@ -2138,10 +2140,10 @@ fn cmd_claim(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "claim ID")?;
     let force = flag(&p, "force");
     let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let names = names(jig)?;
-    let l = load(jig, &names, &p.pos[0])?;
-    let snap = check::scan(jig);
+    let billet = &lock.billet;
+    let names = names(billet)?;
+    let l = load(billet, &names, &p.pos[0])?;
+    let snap = check::scan(billet);
     if let Err(e) = snap.resolve(&l.issue.id) {
         return Err(fail(e.text(&names)));
     }
@@ -2221,8 +2223,8 @@ fn cmd_approve(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_command_tail(args, "approve")?;
     pos_n(&p, 1, "approve ID")?;
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Approve).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
@@ -2236,8 +2238,8 @@ fn cmd_revise(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "revise ID")?;
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Revise).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
@@ -2250,8 +2252,8 @@ fn cmd_unclaim(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_command_tail(args, "unclaim")?;
     pos_n(&p, 1, "unclaim ID")?;
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Unclaim).map_err(fail)?;
     i.assignee = None;
@@ -2274,8 +2276,8 @@ fn cmd_update(args: &[String], cwd: &Path, allow_stdin: bool) -> R<String> {
     }
     let body = body_arg(&p, allow_stdin)?;
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     if opt(&p, "release").is_some() && l.issue.status != Status::Closed {
         return Err(fail(format!(
             "issue {} is not closed",
@@ -2346,8 +2348,8 @@ fn cmd_review(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "review ID")?;
     let summary = opt(&p, "summary");
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Review).map_err(fail)?;
     i.updated_at = Some(clock::now_iso());
@@ -2371,8 +2373,8 @@ fn cmd_rework(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "rework ID")?;
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Rework).map_err(fail)?;
     if i.claim_id.is_none() {
@@ -2393,9 +2395,9 @@ fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let summary = opt(&p, "summary");
     let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let names = names(jig)?;
-    let l = load(jig, &names, &p.pos[0])?;
+    let billet = &lock.billet;
+    let names = names(billet)?;
+    let l = load(billet, &names, &p.pos[0])?;
     let now = clock::now_iso();
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Close).map_err(fail)?;
@@ -2406,7 +2408,7 @@ fn cmd_close(args: &[String], cwd: &Path) -> R<String> {
         i.closing_summary = Some(s.to_string());
     }
     hist_push(&mut i, hist_entry(&history_text("closed:", reason)));
-    store::move_issue(jig, &l, &i).map_err(fail)?;
+    store::move_issue(billet, &l, &i).map_err(fail)?;
     Ok(format!("closed {}\n", names.name(&i.id)))
 }
 
@@ -2415,9 +2417,9 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 1, "reopen ID")?;
     let reason = opt(&p, "reason").ok_or_else(|| usage("--reason is required"))?;
     let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let names = names(jig)?;
-    let l = load(jig, &names, &p.pos[0])?;
+    let billet = &lock.billet;
+    let names = names(billet)?;
+    let l = load(billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     i.status = domain::transition(&i, &names.name(&i.id), Action::Reopen).map_err(fail)?;
     let mut entry = hist_entry(&history_text("reopened:", reason));
@@ -2434,7 +2436,7 @@ fn cmd_reopen(args: &[String], cwd: &Path) -> R<String> {
     i.closed_at = None;
     i.updated_at = Some(clock::now_iso());
     hist_push(&mut i, entry);
-    store::move_issue(jig, &l, &i).map_err(fail)?;
+    store::move_issue(billet, &l, &i).map_err(fail)?;
     Ok(format!("reopened {}\n", names.name(&i.id)))
 }
 
@@ -2443,13 +2445,13 @@ fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
     pos_n(&p, 1, "release NAME")?;
     let name = &p.pos[0];
     let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let snap = check::scan(jig);
-    let names = snapshot_names(jig, &snap)?;
+    let billet = &lock.billet;
+    let snap = check::scan(billet);
+    let names = snapshot_names(billet, &snap)?;
     let warnings = file_warnings(
         &snap,
         |path| {
-            path.starts_with(".jig/closed")
+            path.starts_with(".billet/closed")
                 && snap
                     .records
                     .iter()
@@ -2472,7 +2474,7 @@ fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
         .collect();
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
     for rec in candidates {
-        let loaded = store::find(jig, &rec.issue.id)
+        let loaded = store::find(billet, &rec.issue.id)
             .map_err(fail)?
             .ok_or_else(|| fail(format!("issue {} not found", names.name(&rec.issue.id))))?;
         let mut issue = loaded.issue.clone();
@@ -2495,9 +2497,9 @@ fn cmd_release(args: &[String], cwd: &Path) -> R<CommandOutput> {
     })
 }
 
-fn dep_graph(jig: &Path) -> R<HashMap<String, Vec<String>>> {
+fn dep_graph(billet: &Path) -> R<HashMap<String, Vec<String>>> {
     let mut g = HashMap::new();
-    for l in store::load_all(jig).map_err(fail)? {
+    for l in store::load_all(billet).map_err(fail)? {
         g.insert(l.issue.id.clone(), l.issue.depends_on.clone());
     }
     Ok(g)
@@ -2524,14 +2526,14 @@ fn cmd_dep(args: &[String], cwd: &Path) -> R<String> {
     let p = parse_command_tail(args, "dep")?;
     pos_n(&p, 3, "dep add|rm ID BLOCKER")?;
     let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let names = names(jig)?;
+    let billet = &lock.billet;
+    let names = names(billet)?;
     let id = resolve(&names, &p.pos[1])?;
     let blocker = resolve(&names, &p.pos[2])?;
     if id == blocker {
         return Err(fail("issue cannot depend on itself"));
     }
-    let l = store::find(jig, &id)
+    let l = store::find(billet, &id)
         .map_err(fail)?
         .ok_or_else(|| fail(format!("issue {} not found", names.name(&id))))?;
     let shown = names.name(&id);
@@ -2539,13 +2541,13 @@ fn cmd_dep(args: &[String], cwd: &Path) -> R<String> {
     let mut i = l.issue.clone();
     match p.pos[0].as_str() {
         "add" => {
-            store::find(jig, &blocker)
+            store::find(billet, &blocker)
                 .map_err(fail)?
                 .ok_or_else(|| fail(format!("issue {shown_blocker} not found")))?;
             if i.depends_on.contains(&blocker) {
                 return Err(fail(format!("{shown} already depends on {shown_blocker}")));
             }
-            let g = dep_graph(jig)?;
+            let g = dep_graph(billet)?;
             if reaches(&g, &blocker, &id) {
                 return Err(fail(format!("dependency cycle via {shown_blocker}")));
             }
@@ -2572,8 +2574,8 @@ fn cmd_note(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 2, "note ID TEXT")?;
     let text = &p.pos[1];
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     let mut i = l.issue.clone();
     let who = opt(&p, "by").map(|b| format!("{b}: ")).unwrap_or_default();
     if !i.notes.is_empty() {
@@ -2595,8 +2597,8 @@ fn cmd_defer(args: &[String], cwd: &Path) -> R<String> {
         return Err(usage("defer requires exactly one of --until or --clear"));
     }
     let lock = registry(cwd)?;
-    let names = names(&lock.jig)?;
-    let l = load(&lock.jig, &names, &p.pos[0])?;
+    let names = names(&lock.billet)?;
+    let l = load(&lock.billet, &names, &p.pos[0])?;
     if l.place == Place::Closed && until.is_some() {
         return Err(fail(format!("issue {} is closed", names.name(&l.issue.id))));
     }
@@ -2610,8 +2612,8 @@ fn cmd_defer(args: &[String], cwd: &Path) -> R<String> {
     }
 }
 
-fn load_memory(jig: &Path) -> R<memory::Memory> {
-    let text = std::fs::read_to_string(jig.join("memory.md"))
+fn load_memory(billet: &Path) -> R<memory::Memory> {
+    let text = std::fs::read_to_string(billet.join("memory.md"))
         .map_err(|e| fail(format!("read memory.md: {e}")))?;
     memory::parse(&text).map_err(|e| fail(format!("memory.md: {e}")))
 }
@@ -2621,15 +2623,15 @@ fn cmd_remember(args: &[String], cwd: &Path) -> R<String> {
     pos_n(&p, 2, "remember TOPIC TEXT")?;
     let topic = &p.pos[0];
     let lock = registry(cwd)?;
-    let jig = &lock.jig;
-    let mut mem = load_memory(jig)?;
+    let billet = &lock.billet;
+    let mut mem = load_memory(billet)?;
     let value = p.pos[1].clone();
     match mem.entries.iter_mut().find(|(t, _)| t == topic) {
         Some((_, v)) => *v = value,
         None => mem.entries.push((topic.clone(), value)),
     }
     let text = memory::render(&mem);
-    store::atomic_write(&jig.join("memory.md"), text.as_bytes()).map_err(fail)?;
+    store::atomic_write(&billet.join("memory.md"), text.as_bytes()).map_err(fail)?;
     Ok(format!("remembered {topic}\n"))
 }
 
@@ -2639,8 +2641,8 @@ fn cmd_recall(args: &[String], cwd: &Path, json: bool) -> R<String> {
         return Err(usage("expected at most one topic"));
     }
     let json = json || flag(&p, "json");
-    with_registry(cwd, |jig| {
-        let mem = load_memory(jig)?;
+    with_registry(cwd, |billet| {
+        let mem = load_memory(billet)?;
         match p.pos.first() {
             None => {
                 let mut names: Vec<String> = mem.entries.iter().map(|(t, _)| t.clone()).collect();

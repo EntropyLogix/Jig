@@ -1,4 +1,4 @@
-# Testing Jig
+# Testing Billet
 
 Tests protect the contract in `SPEC.md`. Each test names the contract it
 protects, not the code it touches or the round in which a bug was found.
@@ -12,7 +12,7 @@ protects, not the code it touches or the round in which a bug was found.
 | 1. Domain | `#[cfg(test)]` in `src/` | Pure rules: issue codec, IDs, readiness reasons, argument parsing, history formatting. No process, and no file system unless the rule is about files. |
 | 2. Command contract | `tests/` through the binary | What a command does to a registry and what it prints: lifecycle, readiness, dependencies, text fields, damaged registries, `init`, memory, documents. |
 | 3. Process | `tests/` through the binary | Behavior that needs a real process: exit codes, stdout/stderr split, closed pipes, stdin, `.lock`, concurrent claims, permissions, symlinks, discovery boundaries. |
-| 4. Interface parity | `tests/` through the binary | MCP and CLI give the same result for every tool (`jig mcp` against `jig`), and the MCP transport follows the protocol. |
+| 4. Interface parity | `tests/` through the binary | MCP and CLI give the same result for every tool (`blt mcp` against `blt`), and the MCP transport follows the protocol. |
 
 Put each check at the lowest level that can express it. A rule that holds
 for any input belongs at level 1. Levels 2 to 4 run the real binary,
@@ -68,9 +68,9 @@ problem kind, seed), so the failure points to the declaration to fix.
 
 ## Harness
 
-- Each test gets its own directory under `jig-tests/` in the system
+- Each test gets its own directory under `billet-tests/` in the system
   temporary directory, and its own `XDG_STATE_HOME`. The directory is
-  outside the checkout because this repository tracks its own work in Jig,
+  outside the checkout because this repository tracks its own work in Billet,
   and a test must never discover that registry. Tests run in parallel and
   do not depend on each other's order.
 - Child processes: read stdout and stderr while the process runs, assert

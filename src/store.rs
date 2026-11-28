@@ -42,14 +42,14 @@ pub struct Loaded {
     pub text: String,
 }
 
-const MOVE_MAGIC: &str = "JIG-MOVE-1";
+const MOVE_MAGIC: &str = "BILLET-MOVE-1";
 const GITIGNORE: &str = "/.lock\n/.move\n.*.tmp-*\n";
 const MEMORY_INIT: &str = "# Project Memory\n";
 
 pub(crate) fn diagnostic_path(path: &Path) -> &Path {
     path.ancestors()
-        .find(|p| p.file_name().is_some_and(|n| n == ".jig"))
-        .and_then(|jig| jig.parent())
+        .find(|p| p.file_name().is_some_and(|n| n == ".billet"))
+        .and_then(|billet| billet.parent())
         .and_then(|root| path.strip_prefix(root).ok())
         .unwrap_or(path)
 }
@@ -74,26 +74,26 @@ pub(crate) fn metadata_of(path: &Path, directory: bool) -> Result<Option<fs::Met
     metadata_cause(path, directory).map_err(|e| format!("{}: {e}", diagnostic_path(path).display()))
 }
 
-fn validate_registry(jig: &Path) -> Result<(), String> {
-    if metadata_of(&jig.join("memory.md"), false)?.is_none() {
+fn validate_registry(billet: &Path) -> Result<(), String> {
+    if metadata_of(&billet.join("memory.md"), false)?.is_none() {
         return Err(format!(
-            "partial .jig registry at {}; run `jig init` to repair it",
-            diagnostic_path(jig).display()
+            "partial .billet registry at {}; run `blt init` to repair it",
+            diagnostic_path(billet).display()
         ));
     }
     for place in [Place::Open, Place::Closed] {
-        metadata_of(&jig.join(place.dir()), true)?;
+        metadata_of(&billet.join(place.dir()), true)?;
     }
     Ok(())
 }
 
 fn registry_at(dir: &Path) -> Result<Option<PathBuf>, String> {
-    let jig = dir.join(".jig");
-    if metadata_of(&jig, true)?.is_none() {
+    let billet = dir.join(".billet");
+    if metadata_of(&billet, true)?.is_none() {
         return Ok(None);
     }
-    validate_registry(&jig)?;
-    Ok(Some(jig))
+    validate_registry(&billet)?;
+    Ok(Some(billet))
 }
 
 fn ancestors(dir: &Path) -> Vec<PathBuf> {
@@ -108,30 +108,30 @@ fn ancestors(dir: &Path) -> Vec<PathBuf> {
 
 pub(crate) fn discover_raw(cwd: &Path) -> Result<PathBuf, String> {
     for dir in ancestors(cwd) {
-        let jig = dir.join(".jig");
-        if metadata_of(&jig, true)?.is_some() {
-            return Ok(jig);
+        let billet = dir.join(".billet");
+        if metadata_of(&billet, true)?.is_some() {
+            return Ok(billet);
         }
         if dir.join(".git").exists() {
             break;
         }
     }
-    Err("no .jig registry found; run `jig init` in the project root".to_string())
+    Err("no .billet registry found; run `blt init` in the project root".to_string())
 }
 
 pub fn discover(cwd: &Path) -> Result<PathBuf, String> {
-    let jig = discover_raw(cwd)?;
-    validate_registry(&jig)?;
-    Ok(jig)
+    let billet = discover_raw(cwd)?;
+    validate_registry(&billet)?;
+    Ok(billet)
 }
 
-fn validate_children(jig: &Path) -> Result<(), String> {
+fn validate_children(billet: &Path) -> Result<(), String> {
     for place in [Place::Open, Place::Closed] {
-        metadata_of(&jig.join(place.dir()), true)?;
+        metadata_of(&billet.join(place.dir()), true)?;
     }
-    metadata_of(&jig.join(".gitignore"), false)?;
-    metadata_of(&jig.join("memory.md"), false)?;
-    metadata_of(&jig.join(crate::config::FILE), false)?;
+    metadata_of(&billet.join(".gitignore"), false)?;
+    metadata_of(&billet.join("memory.md"), false)?;
+    metadata_of(&billet.join(crate::config::FILE), false)?;
     Ok(())
 }
 
@@ -144,16 +144,16 @@ pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
             crate::config::PREFIX_RULE
         ));
     }
-    let jig = cwd.join(".jig");
-    if metadata_of(&jig, true)?.is_some() {
-        validate_children(&jig)?;
+    let billet = cwd.join(".billet");
+    if metadata_of(&billet, true)?.is_some() {
+        validate_children(&billet)?;
     } else {
         if !cwd.join(".git").exists() {
             for dir in ancestors(cwd).into_iter().skip(1) {
                 if registry_at(&dir)?.is_some() {
                     return Err(format!(
-                        "refusing to nest .jig under existing registry at {}",
-                        diagnostic_path(&dir.join(".jig")).display()
+                        "refusing to nest .billet under existing registry at {}",
+                        diagnostic_path(&dir.join(".billet")).display()
                     ));
                 }
                 if dir.join(".git").exists() {
@@ -161,21 +161,24 @@ pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
                 }
             }
         }
-        match fs::create_dir(&jig) {
+        match fs::create_dir(&billet) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                validate_children(&jig)?;
+                validate_children(&billet)?;
             }
             Err(e) => {
-                return Err(format!("create {}: {e}", diagnostic_path(&jig).display()));
+                return Err(format!(
+                    "create {}: {e}",
+                    diagnostic_path(&billet).display()
+                ));
             }
         }
     }
-    let _file = exclusive_lock(&jig)?;
-    validate_children(&jig)?;
+    let _file = exclusive_lock(&billet)?;
+    validate_children(&billet)?;
     let mut created = false;
     for place in [Place::Open, Place::Closed] {
-        let dir = jig.join(place.dir());
+        let dir = billet.join(place.dir());
         match fs::create_dir(&dir) {
             Ok(()) => created = true,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
@@ -184,24 +187,24 @@ pub fn init(cwd: &Path, prefix: Option<&str>) -> Result<bool, String> {
             }
         }
     }
-    if metadata_of(&jig.join(".gitignore"), false)?.is_none() {
-        atomic_write(&jig.join(".gitignore"), GITIGNORE.as_bytes())?;
+    if metadata_of(&billet.join(".gitignore"), false)?.is_none() {
+        atomic_write(&billet.join(".gitignore"), GITIGNORE.as_bytes())?;
         created = true;
     }
-    if metadata_of(&jig.join("memory.md"), false)?.is_none() {
-        atomic_write(&jig.join("memory.md"), MEMORY_INIT.as_bytes())?;
+    if metadata_of(&billet.join("memory.md"), false)?.is_none() {
+        atomic_write(&billet.join("memory.md"), MEMORY_INIT.as_bytes())?;
         created = true;
     }
-    let config_path = jig.join(crate::config::FILE);
+    let config_path = billet.join(crate::config::FILE);
     if metadata_of(&config_path, false)?.is_none() {
         let prefix = prefix.unwrap_or(crate::config::DEFAULT_PREFIX);
         atomic_write(&config_path, crate::config::render(prefix).as_bytes())?;
         created = true;
     } else if let Some(prefix) = prefix {
-        let current = crate::config::load(&jig)?;
+        let current = crate::config::load(&billet)?;
         if current.prefix != prefix {
             return Err(format!(
-                "this registry uses prefix {:?}; edit .jig/config.json to change it",
+                "this registry uses prefix {:?}; edit .billet/config.json to change it",
                 current.prefix
             ));
         }
@@ -266,12 +269,12 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 pub struct Lock {
-    pub jig: PathBuf,
+    pub billet: PathBuf,
     _file: fs::File,
 }
 
-fn exclusive_lock(jig: &Path) -> Result<fs::File, String> {
-    let path = jig.join(".lock");
+fn exclusive_lock(billet: &Path) -> Result<fs::File, String> {
+    let path = billet.join(".lock");
     metadata_of(&path, false)?;
     let file = fs::OpenOptions::new()
         .read(true)
@@ -284,17 +287,17 @@ fn exclusive_lock(jig: &Path) -> Result<fs::File, String> {
     Ok(file)
 }
 
-pub fn lock(jig: &Path) -> Result<Lock, String> {
-    let file = exclusive_lock(jig)?;
-    recover(jig)?;
+pub fn lock(billet: &Path) -> Result<Lock, String> {
+    let file = exclusive_lock(billet)?;
+    recover(billet)?;
     Ok(Lock {
-        jig: jig.to_path_buf(),
+        billet: billet.to_path_buf(),
         _file: file,
     })
 }
 
-fn optional_read_lock(jig: &Path) -> Result<Option<fs::File>, String> {
-    let path = jig.join(".lock");
+fn optional_read_lock(billet: &Path) -> Result<Option<fs::File>, String> {
+    let path = billet.join(".lock");
     if metadata_of(&path, false)?.is_none() {
         return Ok(None);
     }
@@ -305,13 +308,13 @@ fn optional_read_lock(jig: &Path) -> Result<Option<fs::File>, String> {
     }
 }
 
-fn move_present(jig: &Path) -> Result<bool, String> {
-    match fs::symlink_metadata(jig.join(".move")) {
+fn move_present(billet: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(billet.join(".move")) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!(
             "inspect {}: {e}",
-            diagnostic_path(&jig.join(".move")).display()
+            diagnostic_path(&billet.join(".move")).display()
         )),
     }
 }
@@ -323,41 +326,41 @@ pub(crate) enum Recovery {
 }
 
 pub(crate) fn with_read<T>(
-    jig: &Path,
+    billet: &Path,
     recovery: Recovery,
     mut read: impl FnMut() -> T,
 ) -> Result<T, String> {
     loop {
-        match optional_read_lock(jig)? {
+        match optional_read_lock(billet)? {
             Some(file) => {
                 file.lock_shared()
                     .map_err(|e| format!("acquire shared lock: {e}"))?;
-                if matches!(recovery, Recovery::Allow) && move_present(jig)? {
+                if matches!(recovery, Recovery::Allow) && move_present(billet)? {
                     file.unlock()
                         .map_err(|e| format!("release shared lock: {e}"))?;
                     file.lock()
                         .map_err(|e| format!("acquire lock for pending move: {e}"))?;
-                    recover(jig).map_err(|e| {
+                    recover(billet).map_err(|e| {
                         format!(
-                            "pending .jig/.move recovery failed: {e}; finishing the journal needs a writable registry — inspect it with `jig check`"
+                            "pending .billet/.move recovery failed: {e}; finishing the journal needs a writable registry — inspect it with `blt check`"
                         )
                     })?;
                 }
                 return Ok(read());
             }
             None => {
-                let pending = move_present(jig);
+                let pending = move_present(billet);
                 let result = match pending {
                     Err(e) => Err(e),
                     Ok(true) if matches!(recovery, Recovery::Allow) => Err(
-                        ".jig/.move is pending but no lock exists; the registry needs a writable \
-                         checkout to finish it — inspect with `jig check` and run a write command \
-                         where .jig is writable"
+                        ".billet/.move is pending but no lock exists; the registry needs a writable \
+                         checkout to finish it — inspect with `blt check` and run a write command \
+                         where .billet is writable"
                             .to_string(),
                     ),
                     _ => Ok(read()),
                 };
-                if metadata_of(&jig.join(".lock"), false)?.is_some() {
+                if metadata_of(&billet.join(".lock"), false)?.is_some() {
                     continue;
                 }
                 return result;
@@ -400,8 +403,8 @@ struct MovePlan {
     dst: PathBuf,
 }
 
-fn pending_move(jig: &Path) -> Result<Option<MovePlan>, String> {
-    let mp = jig.join(".move");
+fn pending_move(billet: &Path) -> Result<Option<MovePlan>, String> {
+    let mp = billet.join(".move");
     let Some(raw) = read_opt(&mp)? else {
         return Ok(None);
     };
@@ -420,13 +423,13 @@ fn pending_move(jig: &Path) -> Result<Option<MovePlan>, String> {
         return Err("move journal without status crossing".to_string());
     }
     for place in [Place::Open, Place::Closed] {
-        metadata_of(&jig.join(place.dir()), true)?;
+        metadata_of(&billet.join(place.dir()), true)?;
     }
     let id = old_issue.id;
-    let src = jig
+    let src = billet
         .join(Place::of(old_issue.status).dir())
         .join(format!("{id}.md"));
-    let dst = jig
+    let dst = billet
         .join(Place::of(new_issue.status).dir())
         .join(format!("{id}.md"));
     Ok(Some(MovePlan {
@@ -457,15 +460,15 @@ fn move_step(plan: &MovePlan) -> Result<MoveStep, String> {
     }
 }
 
-fn recover(jig: &Path) -> Result<(), String> {
-    let Some(plan) = pending_move(jig)? else {
+fn recover(billet: &Path) -> Result<(), String> {
+    let Some(plan) = pending_move(billet)? else {
         return Ok(());
     };
-    let mp = jig.join(".move");
+    let mp = billet.join(".move");
     let src_dir = plan.src.parent().unwrap().to_path_buf();
     let dst_dir = plan.dst.parent().unwrap().to_path_buf();
     loop {
-        match move_step(&plan).map_err(|e| format!("{e}; inspect with `jig check`"))? {
+        match move_step(&plan).map_err(|e| format!("{e}; inspect with `blt check`"))? {
             MoveStep::Rename => {
                 fs::rename(&plan.src, &plan.dst)
                     .map_err(|e| format!("recover move {}: {e}", plan.id))?;
@@ -477,15 +480,15 @@ fn recover(jig: &Path) -> Result<(), String> {
             }
             MoveStep::Remove => {
                 fs::remove_file(&mp).map_err(|e| format!("remove move journal: {e}"))?;
-                sync_dir(jig)?;
+                sync_dir(billet)?;
                 return Ok(());
             }
         }
     }
 }
 
-pub(crate) fn inspect_move(jig: &Path) -> Result<Option<String>, String> {
-    match pending_move(jig)? {
+pub(crate) fn inspect_move(billet: &Path) -> Result<Option<String>, String> {
+    match pending_move(billet)? {
         None => Ok(None),
         Some(plan) => {
             move_step(&plan)?;
@@ -528,8 +531,8 @@ fn load_file(place: Place, path: PathBuf) -> Result<Loaded, String> {
     })
 }
 
-pub fn load_place(jig: &Path, place: Place) -> Result<Vec<Loaded>, String> {
-    let dir = jig.join(place.dir());
+pub fn load_place(billet: &Path, place: Place) -> Result<Vec<Loaded>, String> {
+    let dir = billet.join(place.dir());
     let mut out = Vec::new();
     let rd = match fs::read_dir(&dir) {
         Ok(rd) => rd,
@@ -551,9 +554,9 @@ pub fn load_place(jig: &Path, place: Place) -> Result<Vec<Loaded>, String> {
     Ok(out)
 }
 
-pub fn load_all(jig: &Path) -> Result<Vec<Loaded>, String> {
-    let mut all = load_place(jig, Place::Open)?;
-    all.extend(load_place(jig, Place::Closed)?);
+pub fn load_all(billet: &Path) -> Result<Vec<Loaded>, String> {
+    let mut all = load_place(billet, Place::Open)?;
+    all.extend(load_place(billet, Place::Closed)?);
     let mut seen = std::collections::HashSet::new();
     for l in &all {
         if !seen.insert(l.issue.id.as_str()) {
@@ -563,10 +566,10 @@ pub fn load_all(jig: &Path) -> Result<Vec<Loaded>, String> {
     Ok(all)
 }
 
-pub fn find(jig: &Path, id: &str) -> Result<Option<Loaded>, String> {
+pub fn find(billet: &Path, id: &str) -> Result<Option<Loaded>, String> {
     let mut found: Option<Loaded> = None;
     for place in [Place::Open, Place::Closed] {
-        let path = jig.join(place.dir()).join(format!("{id}.md"));
+        let path = billet.join(place.dir()).join(format!("{id}.md"));
         if metadata_of(&path, false)?.is_none() {
             continue;
         }
@@ -582,16 +585,16 @@ pub fn find(jig: &Path, id: &str) -> Result<Option<Loaded>, String> {
     Ok(found)
 }
 
-pub fn exists(jig: &Path, id: &str) -> bool {
+pub fn exists(billet: &Path, id: &str) -> bool {
     [Place::Open, Place::Closed]
         .iter()
-        .any(|p| fs::symlink_metadata(jig.join(p.dir()).join(format!("{id}.md"))).is_ok())
+        .any(|p| fs::symlink_metadata(billet.join(p.dir()).join(format!("{id}.md"))).is_ok())
 }
 
 fn ensure_consistent(loaded: &Loaded) -> Result<(), String> {
     if let Some((problem, _)) = domain::field_problems(&loaded.issue).first() {
         return Err(format!(
-            "{}: {problem}; run `jig check`",
+            "{}: {problem}; run `blt check`",
             diagnostic_path(&loaded.path).display()
         ));
     }
@@ -604,9 +607,9 @@ pub fn write_issue(loaded: &Loaded, issue: &Issue) -> Result<(), String> {
     atomic_write(&loaded.path, text.as_bytes())
 }
 
-pub fn write_new(jig: &Path, issue: &Issue) -> Result<PathBuf, String> {
+pub fn write_new(billet: &Path, issue: &Issue) -> Result<PathBuf, String> {
     let place = Place::of(issue.status);
-    let dir = jig.join(place.dir());
+    let dir = billet.join(place.dir());
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.md", issue.id));
     if metadata_of(&path, false)?.is_some() {
@@ -620,9 +623,9 @@ pub fn write_new(jig: &Path, issue: &Issue) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-pub fn move_issue(jig: &Path, loaded: &Loaded, new_issue: &Issue) -> Result<(), String> {
+pub fn move_issue(billet: &Path, loaded: &Loaded, new_issue: &Issue) -> Result<(), String> {
     ensure_consistent(loaded)?;
-    let dst_dir = jig.join(loaded.place.other().dir());
+    let dst_dir = billet.join(loaded.place.other().dir());
     fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
     let dst = dst_dir.join(format!("{}.md", loaded.issue.id));
     if metadata_of(&dst, false)?.is_some() {
@@ -640,8 +643,8 @@ pub fn move_issue(jig: &Path, loaded: &Loaded, new_issue: &Issue) -> Result<(), 
     journal.push('\n');
     journal.push_str(&loaded.text);
     journal.push_str(&new_text);
-    atomic_write(&jig.join(".move"), journal.as_bytes())?;
-    recover(jig)
+    atomic_write(&billet.join(".move"), journal.as_bytes())?;
+    recover(billet)
 }
 
 #[cfg(test)]
@@ -651,7 +654,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
-        let base = std::env::temp_dir().join("jig-tests");
+        let base = std::env::temp_dir().join("billet-tests");
         fs::create_dir_all(&base).unwrap();
         let p = base.join(format!(
             "{name}-{}-{}",
@@ -665,14 +668,14 @@ mod tests {
     #[test]
     fn read_rechecks_lock_created_mid_read() {
         let root = scratch("readrecheck");
-        let jig = root.join(".jig");
-        fs::create_dir(&jig).unwrap();
-        fs::create_dir(jig.join("open")).unwrap();
+        let billet = root.join(".billet");
+        fs::create_dir(&billet).unwrap();
+        fs::create_dir(billet.join("open")).unwrap();
         let calls = AtomicUsize::new(0);
-        let observed = with_read(&jig, Recovery::Allow, || {
-            let n = fs::read_dir(&jig).unwrap().count();
+        let observed = with_read(&billet, Recovery::Allow, || {
+            let n = fs::read_dir(&billet).unwrap().count();
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                drop(exclusive_lock(&jig).unwrap());
+                drop(exclusive_lock(&billet).unwrap());
             }
             n
         })
@@ -685,13 +688,13 @@ mod tests {
         assert_eq!(observed, 2, "second attempt sees open/ plus .lock");
 
         let calls = AtomicUsize::new(0);
-        fs::remove_file(jig.join(".lock")).unwrap();
-        let observed: Result<usize, String> = with_read(&jig, Recovery::Allow, || {
+        fs::remove_file(billet.join(".lock")).unwrap();
+        let observed: Result<usize, String> = with_read(&billet, Recovery::Allow, || {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                drop(exclusive_lock(&jig).unwrap());
+                drop(exclusive_lock(&billet).unwrap());
                 return Err("first attempt failed".to_string());
             }
-            Ok(fs::read_dir(&jig).unwrap().count())
+            Ok(fs::read_dir(&billet).unwrap().count())
         })
         .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -702,21 +705,21 @@ mod tests {
     #[test]
     fn read_retries_and_recovers_move_staged_mid_read() {
         let root = scratch("readmove");
-        let jig = root.join(".jig");
-        fs::create_dir(&jig).unwrap();
-        fs::create_dir(jig.join("open")).unwrap();
-        fs::create_dir(jig.join("closed")).unwrap();
+        let billet = root.join(".billet");
+        fs::create_dir(&billet).unwrap();
+        fs::create_dir(billet.join("open")).unwrap();
+        fs::create_dir(billet.join("closed")).unwrap();
         let old = "---\nid: \"1aaaaa\"\nnumber: 1\ntitle: \"T\"\nstatus: open\npriority: 2\nparent: null\n\
             depends_on: []\nassignee: null\ndefer_until: null\ncreated_at: null\n\
             updated_at: null\nclosed_at: null\nrelease: null\nclaim_id: null\n---\n\n## History\n\n## Notes\n\n";
         let new = old.replace("status: open", "status: closed");
-        fs::write(jig.join("open/1aaaaa.md"), old).unwrap();
+        fs::write(billet.join("open/1aaaaa.md"), old).unwrap();
 
         let calls = AtomicUsize::new(0);
         let observed: Result<crate::issue::Status, String> =
-            with_read(&jig, Recovery::Allow, || {
+            with_read(&billet, Recovery::Allow, || {
                 if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                    let guard = exclusive_lock(&jig).unwrap();
+                    let guard = exclusive_lock(&billet).unwrap();
                     let mut journal = String::from(MOVE_MAGIC);
                     journal.push('\n');
                     journal.push_str(&old.len().to_string());
@@ -725,12 +728,16 @@ mod tests {
                     journal.push('\n');
                     journal.push_str(old);
                     journal.push_str(&new);
-                    fs::write(jig.join(".move"), journal).unwrap();
-                    fs::rename(jig.join("open/1aaaaa.md"), jig.join("closed/1aaaaa.md")).unwrap();
+                    fs::write(billet.join(".move"), journal).unwrap();
+                    fs::rename(
+                        billet.join("open/1aaaaa.md"),
+                        billet.join("closed/1aaaaa.md"),
+                    )
+                    .unwrap();
                     drop(guard);
                 }
-                let loaded =
-                    find(&jig, "1aaaaa")?.ok_or_else(|| "issue vanished mid-move".to_string())?;
+                let loaded = find(&billet, "1aaaaa")?
+                    .ok_or_else(|| "issue vanished mid-move".to_string())?;
                 if Place::of(loaded.issue.status) != loaded.place {
                     return Err(format!(
                         "mismatched in-between state: status {} in {}/",
@@ -743,9 +750,12 @@ mod tests {
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(observed.unwrap(), crate::issue::Status::Closed);
-        assert!(!jig.join(".move").exists(), "recovery removed the journal");
-        assert!(jig.join("closed/1aaaaa.md").is_file());
-        assert!(!jig.join("open/1aaaaa.md").exists());
+        assert!(
+            !billet.join(".move").exists(),
+            "recovery removed the journal"
+        );
+        assert!(billet.join("closed/1aaaaa.md").is_file());
+        assert!(!billet.join("open/1aaaaa.md").exists());
         let _ = fs::remove_dir_all(&root);
     }
 }
