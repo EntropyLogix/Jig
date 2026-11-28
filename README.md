@@ -53,6 +53,28 @@ changes so that mutations are serialized by `.jig/.lock` and cross-directory
 moves are journaled through `.jig/.move` (a crashed move is finished on the
 next command). Agents write issue documents directly under `.jig/docs/KEY/`.
 
+## Workflow
+
+An issue moves through five statuses:
+
+| Status | Meaning | Next step |
+| --- | --- | --- |
+| `proposed` | definition: the contract is being worked out, not work yet | `approve` → `open`; `close` rejects it |
+| `open` | the contract is agreed and can be implemented | `claim` → `claimed`; `revise` → `proposed` |
+| `claimed` | one agent or person is working on it | `review` → `review`; `unclaim` → `open` |
+| `review` | the work is handed over for review | `rework` → `claimed` (same assignee); `close` → `closed` |
+| `closed` | done or rejected; the file moves to `.jig/closed/` | `reopen` → `open` |
+
+A person may also `close` an issue from any active status, with or without a
+review, for example as a duplicate or as obsolete.
+
+`jig add` creates a proposal (`--approved` starts at `open`). Discussion and
+analysis are folded into its description as the contract changes, and long
+material belongs in its issue documents. Agents add without `--approved` and
+do not treat a proposal as work. Approving, revising, returning for rework,
+and closing issues are human decisions unless a person explicitly instructs
+an agent for that issue.
+
 ## Issue numbers
 
 People and agents refer to an issue by its handle: the project prefix and a
@@ -203,17 +225,6 @@ as an error.
 the marker and is allowed on a closed issue. Closed ancestors never defer
 their descendants.
 
-`jig add` creates a `proposed` issue, which is the definition stage. Discussion
-and analysis are folded into its description as the contract changes, and long
-material belongs in its issue documents. Agents add without `--approved` and do
-not treat a proposal as work. A person moves it to `open` with `jig approve`
-(`--approved` starts there), which means the contract is agreed and can be
-implemented. `jig revise --reason` returns an open issue to definition, and
-`jig close` can reject it. Work runs `open` → `claimed` (`jig claim`) →
-`review` (`jig review`, `jig rework` sends it back) → `closed`.
-Approving, revising, returning for rework, and closing issues are human
-decisions unless a person explicitly instructs an agent for that issue.
-
 Use `jig list --sort oldest` or `jig list --sort newest` to order by creation
 date rather than priority. Unknown creation dates sort last in either
 direction. The text view includes the stored creation date; JSON keeps the
@@ -356,11 +367,21 @@ executables.
 ## Optional: jig-crew
 
 [`crew/`](crew/) is an optional skill for Claude Code and Codex that runs a
-review loop on top of Jig: a developer implements an issue, auditors check
-it independently, and a review lead merges their reports into one decision
-for the developer. It uses only Jig's statuses, history, and issue
-documents; the `jig` binary does not depend on it. See
-[`crew/README.md`](crew/README.md).
+review loop on top of Jig:
+
+1. Optionally, an architect turns a proposal into a contract, with an
+   `architecture.md` and subtasks, before a person approves it.
+2. A developer claims the issue, implements it, and hands it over with
+   `jig review`.
+3. Any number of auditors check the work independently, each writing its own
+   report.
+4. A review lead merges the reports into one decision. On `jig rework` the
+   developer works only from that decision, and the loop repeats.
+5. A person closes the issue.
+
+Crew uses only Jig's statuses, history, notes, and issue documents; the
+`jig` binary does not depend on it. Install it with `crew/install.sh`. See
+[`crew/README.md`](crew/README.md) for the full loop, rounds, and layout.
 
 ## Issue file format
 
